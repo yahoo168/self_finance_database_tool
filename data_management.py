@@ -14,11 +14,12 @@ from .utils import *
 from .polygon_tools import *
 from .yfinance_tools import *
 
+
 logging.basicConfig(level=logging.INFO,
     format='[%(asctime)s %(levelname)-8s] %(message)s',
     datefmt='%Y%m%d %H:%M:%S',)
 
-class Database(object):
+class DataManagement(object):
     '''
     - Database為一資料庫物件，透過給定的folder_path對指定的資料庫（資料夾）進行操作
     - 功能可分為下載(save)與呼叫(get)資料兩大類
@@ -130,146 +131,6 @@ class Database(object):
             status_dict[item] = status
         return pd.DataFrame(status_dict).T
 
-    # 取得特定區域的交易日日期序列，區域預設為美國（US），其他選項包括：TW（台灣）
-    def get_tradeDate_list(self, country="US"):
-        folderName = self.tradedate_folderName
-        file_position = os.path.join(self.database_folder_path, folderName, country+"_trade_date.pkl")
-        tradeDate_list = pd.read_pickle(file_position)
-        tradeDate_list = tradeDate_list.to_list()
-        self.cache_dict["tradeDate_list"] = tradeDate_list
-        return tradeDate_list
-
-    # 待改：get_next_tradeDate與get_last_tradeDate應該合併
-    # 若給定日期並非交易日，則取得距離最近的下一個實際交易日（區域預設為美國（US）），其他選項包括：TW（台灣）
-    def get_next_tradeDate(self, date, shift_days=0, country="US"):
-        # 若輸入date為字串，先轉為datetime物件
-        if type(date) is str:
-            date = str2datetime(date)
-
-        date = date + timedelta(days=shift_days)
-        # 待改：多區域時，資料會被覆寫
-        if "tradeDate_list" in self.cache_dict.keys():
-            tradeDate_list = self.cache_dict["tradeDate_list"]
-
-        else:
-            tradeDate_list = self.get_tradeDate_list(country=country)
-
-        if date not in tradeDate_list:
-            virtual_date_list = tradeDate_list.copy()
-            virtual_date_list.append(date)
-            virtual_date_list.sort()
-            latest_tradeDate_index = virtual_date_list.index(date)
-            return tradeDate_list[latest_tradeDate_index]
-        else:
-            return date
-
-    # 若給定日期並非交易日，則取得距離最近的上一個實際交易日（區域預設為美國（US））
-    def get_last_tradeDate(self, date, shift_days=0, country="US"):
-        # 若輸入date為字串，先轉為datetime物件
-        if type(date) is str:
-            date = str2datetime(date)
-
-        date = date+timedelta(days=shift_days)
-        if "tradeDate_list" in self.cache_dict.keys():
-            tradeDate_list = self.cache_dict["tradeDate_list"]
-        else:
-            tradeDate_list = self.get_tradeDate_list(country=country)
-
-        if date not in tradeDate_list:
-            virtual_date_list = tradeDate_list.copy()
-            virtual_date_list.append(date)
-            virtual_date_list.sort()        
-            latest_tradeDate_index = virtual_date_list.index(date)
-            return tradeDate_list[latest_tradeDate_index-1]
-        else:
-            return date
-
-    # 取得FRED官網公布的總經數據，name的可用選項，見Macro/Token_trans/fred.txt
-    def get_fred_data(self, name):
-        folderPath = self.macro_folderPath
-        filePath = os.path.join(folderPath, name+".pkl")
-        data_df = pd.read_pickle(filePath)  
-        return data_df
-
-    def get_cache_df(self, asset_class, universe_name, item, start_date, end_date, country, pre_fetch_nums=0):
-        target_ticker_list = self.get_ticker_list(universe_name)
-        
-        folderPath = os.path.join(self.cache_folderPath, "get", asset_class)
-        filePath = os.path.join(folderPath, item+".csv")
-
-        start_date = start_date + timedelta(days = -pre_fetch_nums)
-        print(filePath)
-        if os.path.exists(filePath):
-            logging.warning("Cache存在")
-            cache_df = pd.read_csv(filePath, index_col=0)
-            cache_df.index = pd.to_datetime(cache_df.index)
-
-            lost_ticker_list = list(set(target_ticker_list) - set(cache_df.columns))
-            re_target_ticker_list = list(set(target_ticker_list) - set(lost_ticker_list))
-            
-            if len(lost_ticker_list) > 0:
-                logging.warning("資料項目:{}共{}檔標的缺失，缺失標的如下:".format(item, len(lost_ticker_list)))
-                logging.warning(lost_ticker_list)
-
-            mask = (cache_df.index>=start_date) & (cache_df.index<=end_date)
-            cache_df = cache_df.loc[mask, re_target_ticker_list]
-            print(cache_df)
-
-        else:
-            logging.warning("Cache不存在")
-            cache_df = pd.DataFrame()
-        return cache_df
-
-    # 將時序資料取出，組合為塊狀資料（Row:date, column: ticker)，若不指定資料時間區段，則預設為全部取出
-    def get_stock_data_df(self, item, target_ticker_list=None, start_date="1900-01-01", 
-                                end_date="2100-12-31", pre_fetch_nums=0, country="US"):
-        if country == "US":
-            folderPath = self.US_stock_folderPath
-        elif country == "TW":
-            folderPath = self.TW_stock_folderPath
-        
-        # 待改：應該直接使用dateime?
-        if type(start_date) is not str:
-            start_date = datetime2str(start_date)
-        if type(end_date) is not str:
-            end_date = datetime2str(end_date)
-
-        item_folderPath = os.path.join(folderPath, item)
-        # 取得指定資料夾中所有檔案名(以時間戳記命名）
-        raw_date_list = os.listdir(item_folderPath)
-        # 去除檔案名中的後綴名（.csv)
-        date_list = [date.split(".")[0] for date in raw_date_list]
-        # 去除異常空值（可能由.DS_store之類的隱藏檔所導致）
-        date_list = [date for date in date_list if len(date) != 0]
-        # 將時間戳記組合成date series，以篩選出指定的資料區間（同時進行排序與重設index）
-        date_series = pd.Series(date_list).apply(lambda x:str2datetime(x)).sort_values().reset_index(drop=True)
-        # 向前額外取N日資料，以使策略起始時便有前期資料可供計算
-        start_date = shift_days_by_strDate(start_date, -pre_fetch_nums)
-        mask = (date_series >= start_date) & (date_series <= end_date) 
-        # 將date series轉為將date list（字串列表），以用於後續讀取資料
-        date_list = list(map(lambda x:datetime2str(x), date_series[mask]))
-        # 依照date list逐日取出資料，組合為DataFrame
-        df_list = list()
-        for date in date_list:
-            fileName = os.path.join(item_folderPath, date+".csv")
-            df_list.append(pd.read_csv(fileName, index_col=0))
-        df = pd.concat(df_list, axis=1).T.sort_index()
-        
-        # 若不指定ticker，則預設為全部取出
-        if target_ticker_list == None:
-            return df
-
-        lost_ticker_list = list(set(target_ticker_list) - set(df.columns))
-        re_target_ticker_list = list(set(target_ticker_list) - set(lost_ticker_list))
-        if len(lost_ticker_list) > 0:
-            logging.warning("資料項目:{}共{}檔標的缺失，缺失標的如下:".format(item, len(lost_ticker_list)))
-            logging.warning(lost_ticker_list)
-
-        df.index = pd.to_datetime(df.index)
-        return df.loc[:, re_target_ticker_list]
-    
-    ## 呼叫資料的函數區域（結束）
-
     ## 下載資料的函數區域（開始）
     def save_stock_priceVolume_data(self, ticker_list=None, start_date=None, end_date=None, 
                                     item_list=None, adjusted=True, source="polygon", country="US"):
@@ -361,44 +222,6 @@ class Database(object):
         file_position = os.path.join(folder_path, name+".pkl")
         data_df.to_pickle(file_position)
         return data_df
-
-    def save_daily_return(self, start_date=None, method="c_to_c", dividend=False, country="US"):
-        if country == "US":
-            folderPath = self.US_stock_folderPath
-        elif country == "TW":
-            folderPath = self.TW_stock_folderPath
-
-        if method == "c_to_c":
-            folderName, price_item = "ret_c_to_c", "close"
-
-        elif method == "o_to_o":
-            folderName, price_item = "ret_o_to_o", "open"
-
-        make_folder(os.path.join(folderPath, folderName))
-        if start_date == None:
-            status_df = self.get_data_status([folderName], country=country, data_class="stock")
-            if status_df.at[folderName, "date_num"] > 0:
-                #不遞延一天，因若日報酬更新至t日，為計算t+1日的日報酬，須取得t日的價格與分割資料
-                start_date = status_df.at[folderName, "end_date"]
-            else:
-                start_date = "1900-01-01"
-
-        price_df = self.get_stock_data_df(item=price_item, start_date=start_date)
-        stock_splits_df = self.get_stock_data_df(item="stock_splits", start_date=start_date, country=country)
-        adjust_factor_df = cal_adjust_factor_df(stock_splits_df, date_list=price_df.index, method="forward")
-        adjust_ticker_list = price_df.columns.intersection(stock_splits_df.columns)        
-        adjusted_item_df = price_df[adjust_ticker_list] * adjust_factor_df
-        # adjusted_item_df後面若不給定ticker，會導致對item_df賦值時，columns對不齊
-        price_df[adjust_ticker_list] = adjusted_item_df[adjust_ticker_list]
-        # 去除第一row
-        return_df = price_df.pct_change().iloc[1:,:]
-
-        for i in range(len(return_df)):
-            data = return_df.iloc[i,:]
-            fileName = data.name
-            filePath = os.path.join(folderPath, folderName, fileName+".csv")
-            data.to_csv(filePath)
-
 
     # 前調法：將原始OHLCV依照split轉化為adjusted OHLCV
     def save_adjusted_data_by_stock_splits(self, start_date, item_list, method="forward", country="US", cal_dividend=False):
