@@ -59,3 +59,32 @@ def save_stock_priceVolume_from_yfinance(save_folderPath, cache_folderPath, star
             # 存檔至以指定資料項目為名的資料夾之下，檔名為該日日期
             fileName = os.path.join(item_folderPath, data_series.name+".csv")
             data_series.to_csv(fileName)
+
+# 因資料筆數多（約15000筆），中途可能因網路問題導致報錯，為避免須重新下載而設計cache機制
+def _save_stock_priceVolume_from_yfinance_singleTicker(folderPath, ticker, start_date, country, adjusted):
+    filePath = os.path.join(folderPath, ticker+".csv")
+    # 若所需檔案不在cache中，則透過yfinance載入資料；待改：若在cache中但時間過時，也應該刪掉
+    if not os.path.exists(filePath):
+        # yfinance預設會額外下載dividend與stock-split資料，可將actions設為False以改變設定
+        # yfinance預設會自動調整OHLC，
+        ticker_for_search = ticker.replace("_", "-")
+        if adjusted:
+            data_df = yf.Ticker(ticker_for_search).history(period="max", start=start_date, auto_adjust=True, actions=True)
+        else:
+            data_df = yf.Ticker(ticker_for_search).history(period="max", start=start_date, auto_adjust=False, actions=True)
+        
+        # yfinance預設為首字母大寫，此處調整為全小寫
+        data_df.columns = [x.lower().replace(' ', '_') for x in data_df.columns]
+        # 將datetime index轉為EOD類型的字串index
+        data_df.index = data_df.index.to_series().apply(lambda x: datetime2str(x))
+        if len(data_df) > 0:
+            data_df.to_csv(filePath)
+            logging.info("[PV][yfinance][{}]:資料已下載至cache".format(ticker))
+    # 若所需檔案已在cache中，則透過cache載入資料
+    else:
+        #data_df = pd.read_csv(filePath, index_col=0)
+        logging.info("[PV][yfinance][{}]:資料已存在於cache".format(ticker))
+
+def _download_data_from_yfinance(ticker):
+    ticker = yf.Ticker(ticker)
+    return ticker.history(period="max", actions=False)
