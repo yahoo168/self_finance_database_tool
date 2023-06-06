@@ -117,7 +117,7 @@ def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_d
     except Exception as e:
         logging.warning(e)
 
-def save_stock_shares_outstanding_from_Polygon(folderPath, cache_folderPath, API_key, ticker_list, start_date=None, end_date=None):
+def save_stock_shares_outstanding_from_Polygon(folderPath, cache_folderPath, API_key, ticker_list, tradeDate_list=None, start_date=None, end_date=None):
     # 流通股數係透過polygon中的ticker detail資訊取得，索取方式為給定ticker與date，故包裝為雙重函數
     def _save_stock_shares_outstanding_from_Polygon_singleDate(folderPath, cache_folderPath, API_key, ticker_list, date):
         def _save_stock_shares_outstanding_from_Polygon_singleTicker(API_key, ticker, date):
@@ -160,8 +160,13 @@ def save_stock_shares_outstanding_from_Polygon(folderPath, cache_folderPath, API
         filePath = os.path.join(folderPath, date+".csv")
         data_series.to_csv(filePath)
 
-    #待改：非交易日不用下載
     date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date,freq='d'))))
+    
+    #若有給定交易日序列，則非交易日不用下載，可加快下載速度    
+    if tradeDate_list != None:
+        date_range_list = set(date_range_list).intersection(set(tradeDate_list))
+        date_range_list = sorted(date_range_list)
+    
     for date in date_range_list:
         _save_stock_shares_outstanding_from_Polygon_singleDate(folderPath, cache_folderPath, API_key, ticker_list, date)
 

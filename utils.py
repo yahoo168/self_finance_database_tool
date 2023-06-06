@@ -51,7 +51,8 @@ def cal_adjust_factor_df(stock_splits_df, date_list, method):
 
     else:
         raise Exception("method typo")
- 
+        
+    adjust_factor_df.index = pd.to_datetime(adjust_factor_df.index)
     return adjust_factor_df
 
 # 若每日變動超過門檻（預設為100%），列為可能出錯清單
