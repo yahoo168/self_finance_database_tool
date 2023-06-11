@@ -340,6 +340,7 @@ class Database(object):
     
     ## 將時序資料取出組合為DataFrame
     def _get_item_data_df(self, item, data_class="stock", target_ticker_list=None, start_date=None, end_date=None, pre_fetch_nums=0, country="US"):
+        #選擇對應的data_stack
         if data_class == "stock":
             data_stack = country+"_"+"stock"
         
@@ -453,17 +454,17 @@ class Database(object):
             pass
     
     # 計算並儲存open_to_open以及close_to_close的raw_data
-    def save_stock_daily_return(self, start_date=None, end_date=None, method="C2C", cal_dividend=True, country="US"):        
+    def save_stock_daily_return(self, start_date=None, end_date=None, method="c2c", cal_dividend=True, country="US"):        
         data_stack = country+"_"+"stock"
-        if method == "C2C":
-            item_name, price_item = "daily_return_C2C", "close"
+        if method == "c2c":
+            item_name, price_item = "ret_c2c", "close"
 
-        elif method == "O2O":
-            item_name, price_item = "daily_return_O2O", "open"
+        elif method == "o2o":
+            item_name, price_item = "ret_o2o", "open"
 
-        if cal_dividend == True:
-            # example:"daily_return_O2O_with_dividend"
-            item_name += "_with_dividends"
+        if cal_dividend == False:
+            # example:"o2o_ret_wo_div"
+            item_name += "_wo_div"
 
         folderPath = self._get_data_path(data_stack="US_stock", item=item_name, data_level="raw_data")
         make_folder(folderPath)
@@ -492,6 +493,7 @@ class Database(object):
         # 將股價加上當日除息的現金股利
         if cal_dividend == True:
             dividends_df = self._get_item_data_df(item="dividends", start_date=start_date, end_date=end_date, country=country)
+            dividends_df = dividends_df.fillna(0)
             dividends_ticker_list = price_df.columns.intersection(dividends_df.columns)
             adjusted_dividends_df = price_df[dividends_ticker_list] + dividends_df[dividends_ticker_list]
             price_df[dividends_ticker_list] = adjusted_dividends_df[dividends_ticker_list]
@@ -524,7 +526,9 @@ class Database(object):
         data_stack = country+"_"+"stock"
         folderPath = self._get_data_path(data_stack="US_stock", item="dividends", data_level="raw_data")
         make_folder(folderPath)
+        # 待改，資料源管理
         save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, date_type="ex_dividend_date")
+    
     # 儲存流通股數raw_data
     def save_stock_shares_outstanding(self, ticker_list=None, start_date=None, end_date=None, source="polygon", country="US"):
         if start_date == None:
@@ -550,7 +554,7 @@ class Database(object):
             save_stock_shares_outstanding_from_Polygon(folderPath, cache_folderPath, self.polygon_API_key, ticker_list, trade_date_list, start_date, end_date)
     
     # 將各類股票資料的raw_data轉化為raw_table並儲存
-    def trans_stock_item_raw_data_to_raw_table(self, item_list, start_date=None, end_date=None, country="US", update=False):
+    def trans_stock_item_raw_data_to_raw_table(self, item_list, start_date=None, end_date=None, country="US"):
         for item in item_list:
             #若不指定起始日，則自該資料所儲存之最早日期，開始合成
             if start_date == None:
@@ -565,7 +569,7 @@ class Database(object):
                 end_date = datetime2str(datetime.today())
 
             # 部分資料組合為塊狀資料後，尚須額外處理，如adjust_factor, universe_ticker...等
-            if item in ["RAY3000", "NDX100", "DOW30", "SPX500"]:
+            if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
                 item_df = self._get_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
                 
             elif item == "stock_splits":
@@ -578,26 +582,52 @@ class Database(object):
             data_stack = country + "_" + "stock"
             folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_table")
             make_folder(folderPath)
+            
             filePath = os.path.join(folderPath, item+".pkl")
-            
-            # 將原存在的merged_table與新讀取的資料進行合併
-            if update == True:
-                old_item_df = pd.read_pickle(filePath)
-                item_df = pd.concat([item_df, old_item_df]).sort_index()
-                item_df = item_df.loc[item_df.index.drop_duplicates(), :]
-                start_date_index, end_date_index = datetime2str(item_df.index[0]), datetime2str(item_df.index[-1])
-                trade_date_list = self.get_trade_date_list(start_date=start_date_index, end_date=end_date_index, country=country)
-                # 確認合併後的資料區間是否已涵蓋該區間內的所有交易日
-                item_df_idx = list(map(lambda x:datetime2str(x), item_df.index))
-                interval_trade_date = list(set(trade_date_list) - set(item_df_idx))
-                if len(interval_trade_date) > 0:
-                    logging.warning("[{item}] 合併後資料區間涵蓋部分非交易日，已略過此資料項目之Raw Table轉換".format(item=item))
-                    logging.warning("[{item}] 缺漏之交易日，列表如下：{interval_trade_date}".format(item=item, interval_trade_date=sorted(interval_trade_date)))
-                    continue
-            
             item_df.to_pickle(filePath)
             logging.info("[{item}][{start_date}-{end_date}] Raw Table資料轉換&儲存完成".format(item=item, 
                                 start_date=datetime2str(item_df.index[0]), end_date=datetime2str(item_df.index[-1])))
+    
+    # 更新各類股票資料的raw_table，# 若為update模式，將原存在的merged_table與新讀取的資料進行合併
+    def update_stock_item_raw_table(self, item_list, country="US"):
+        for item in item_list:
+            data_stack = country + "_" + "stock"
+            folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_table")
+            filePath = os.path.join(folderPath, item+".pkl")
+            old_item_df = pd.read_pickle(filePath)
+            
+            old_item_end_date = datetime2str(old_item_df.index[-1]+timedelta(days=1))
+            today_date = datetime2str(datetime.today())
+            
+            start_date, end_date = old_item_end_date, today_date
+            if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
+                item_df = self._get_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
+                
+            elif item == "stock_splits":
+                item_df = self._get_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+            elif item == "trade_date":
+                item_df = self._get_market_status_df(start_date=start_date, end_date=end_date, country=country)
+            else:
+                item_df = self._get_item_data_df(item=item, start_date=start_date, end_date=end_date, country=country, data_class="stock")
+
+            item_df = pd.concat([item_df, old_item_df]).sort_index()
+            # 確認合併後的資料區間是否已涵蓋該區間內的所有交易日
+            trade_date_list = self.get_trade_date_list(start_date=start_date, end_date=end_date)
+            item_df_index = list(map(lambda x:datetime2str(x), item_df.index))
+            interval_trade_date = list(set(trade_date_list) - set(item_df_index))
+            if len(interval_trade_date) > 0:
+                logging.warning("[{item}] 合併後資料區間未涵蓋部分交易日，已略過此資料項目之Raw Table轉換".format(item=item))
+                logging.warning("[{item}] 缺漏之交易日，列表如下：{interval_trade_date}".format(item=item, interval_trade_date=sorted(interval_trade_date)))
+                continue
+
+            # # 確認新、舊資料row和column皆未重複，避免concat時報錯
+            # item_df = item_df.drop_duplicates()
+            # item_df = item_df.T.drop_duplicates().T
+            # old_item_df = old_item_df.drop_duplicates()
+            # old_item_df = old_item_df.T.drop_duplicates().T
+            item_df.to_pickle(filePath)
+            logging.info("[{item}][{start_date}-{end_date}] Raw Table資料轉換&儲存完成".format(item=item, 
+                            start_date=datetime2str(item_df.index[0]), end_date=datetime2str(item_df.index[-1])))
 
     # ——————————————————————————————————————————————————————————
     # 待完成的函數（開始）
@@ -630,7 +660,7 @@ class Database(object):
         #     logging.info("建議確認以下消失標的之變動情況，是否下市或改名，並進行資料回填：")
         #     logging.info("消失標的:")
         #     logging.info(disappear_ticker_list)
-            index_ticker_list = self.get_ticker_list("US_RAY3000")
+            index_ticker_list = self.get_ticker_list("univ_ray3000")
             disappear_index_ticker_list, _, _ = compare_component(disappear_ticker_list, index_ticker_list)
             if len(disappear_index_ticker_list) > 0:
                 logging.info("[Check][{item}]消失標的中，共{n}檔為Russel 3000成份股，清單如下：".format(item=item, n=len(disappear_index_ticker_list)))
