@@ -280,3 +280,16 @@ def _save_blockData_to_seriesData(folderPath, df, item, com_prev_data):
         # 存檔至以指定資料項目為名的資料夾之下
         fileName = os.path.join(item_folderPath, date+".csv")
         data_series.to_csv(fileName)
+
+
+### 基本面資料流程
+# 1. 一次性歷史資料抓取（依照filing date抓）
+# 2. 一次性建立1-12歷史資料
+# 3. 資料路徑設定（依照4表分類）
+# 4. 建立每日更新函數
+# 5. debug
+#       - 多數公司不公布Q4，而是含在年報中
+
+### note：
+# 六日也可能發布財報
+# polygon的資料2009年後才開始（待確認）

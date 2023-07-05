@@ -75,6 +75,29 @@ def compare_component(s1, s2):
     only_2_part_list = sorted(list(set(s2) - set(s1)))
     return common_part_list, only_1_part_list, only_2_part_list
 
+# 中段空值檢查：即自初次有資料開始後直到下市前，中間空值出現的比例
+def cal_interval_nan_value(df):
+    initial_nan_nums = df.ffill().isna().astype(int).sum()
+    last_nan_nums = df.bfill().isna().astype(int).sum()
+    all_nan_nums = df.isna().astype(int).sum()
+    interval_nan_nums = all_nan_nums - (initial_nan_nums + last_nan_nums)
+    interval_nan_ratio = interval_nan_nums / (len(df) - (initial_nan_nums+last_nan_nums))
+    return interval_nan_ratio
+
+# 透過分割資料核對股價是否異常變動
+def cal_return_max_abs_zscore(price_df, adjust_factor_df):
+    # 只針對有分割資料的個股作股價調整
+    adjust_ticker_list = price_df.columns.intersection(adjust_factor_df.columns)        
+    adjusted_item_df = price_df[adjust_ticker_list] * adjust_factor_df
+    # 若不給定ticker_list，會導致對賦值時，columns沒有對齊
+    price_df[adjust_ticker_list] = adjusted_item_df[adjust_ticker_list]
+    return_df = price_df.pct_change()
+    return_mean_df, return_std_df = return_df.rolling(22).mean(), return_df.rolling(22).std()
+    return_zscore_df = (return_df - return_mean_df) / return_std_df
+    max_abs_zscore_series = abs(return_zscore_df).max()
+    return max_abs_zscore_series
+
+
 # 塊狀資料轉化為時序資料:
 
 # # 將指定資料夾中的塊狀資料(fileName:ticker, row:date, column:items)轉化為時序型資料
