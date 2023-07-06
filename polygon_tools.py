@@ -62,7 +62,7 @@ def save_stock_split_from_Polygon(folderPath, API_key, start_date=None, end_date
         results_dict = data_json["results"]
         if len(results_dict) > 0:
             df = pd.DataFrame(results_dict)
-            df["adjust_factor"] = df["split_to"]/df["split_from"]
+            df["adjust_factor"] = df["split_to"] / df["split_from"]
             df = df.pivot(index="execution_date", columns="ticker", values="adjust_factor").T
             filePath = os.path.join(folderPath, date+".csv")
             df.to_csv(filePath)
@@ -75,6 +75,7 @@ def save_stock_split_from_Polygon(folderPath, API_key, start_date=None, end_date
             t = Thread(target=_save_stock_split_from_Polygon_singleDate, 
                         args=(folderPath, API_key, date))
             t.start()  # 開啟線程
+
             #在線程之間設定間隔（0.5秒），避免資料源過載或爬蟲阻擋
             time.sleep(0.1)
             threads.append(t)
@@ -86,10 +87,10 @@ def save_stock_split_from_Polygon(folderPath, API_key, start_date=None, end_date
     except Exception as e:
         logging.warning(e)
 
-def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_date, date_type="ex_dividend_date"):
-    def _save_stock_cash_dividend_from_Polygon_singleDate(folderPath, date_type, date, API_key):
+def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_date, data_type="ex_dividend_date"):
+    def _save_stock_cash_dividend_from_Polygon_singleDate(folderPath, data_type, date, API_key):
         #只下載現金股利（CD）
-        url = "https://api.polygon.io/v3/reference/dividends?{0}={1}&apiKey={2}&dividend_type=CD".format(date_type, date, API_key)
+        url = "https://api.polygon.io/v3/reference/dividends?{0}={1}&apiKey={2}&dividend_type=CD".format(data_type, date, API_key)
         data_json = requests.get(url).json()
         results_dict = data_json["results"]
         if len(results_dict) > 0:
@@ -104,7 +105,7 @@ def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_d
     try:
         for index, date in enumerate(date_range_list, 1):
             t = Thread(target=_save_stock_cash_dividend_from_Polygon_singleDate, 
-                        args=(folderPath, date_type, date, API_key))
+                        args=(folderPath, data_type, date, API_key))
             t.start()  # 開啟線程
             #在線程之間設定間隔（0.5秒），避免資料源過載或爬蟲阻擋
             time.sleep(0.1)
