@@ -75,9 +75,9 @@ class Database(object):
         if data_level == "raw_data":
             return os.path.join(self.raw_data_folderPath, data_stack, item_folderPath)
         elif data_level == "raw_table":
-            return os.path.join(self.raw_data_folderPath, data_stack, item_folderPath)
+            return os.path.join(self.raw_table_folderPath, data_stack, item_folderPath)
         elif data_level == "table":
-            return os.path.join(self.raw_data_folderPath, data_stack, item_folderPath)
+            return os.path.join(self.table_folderPath, data_stack, item_folderPath)
 
     ## 取得單一資料項目的儲存狀況：起始日期/最新更新日期/資料筆數，回傳dict
     def _get_single_data_status(self, data_stack, item, data_level="raw_data"):
@@ -654,7 +654,7 @@ class Database(object):
             data_stack = "TW_stock"
 
         for item in item_list:
-            old_item_df = self.get_data_table_df(item=item, data_stack=data_stack, data_level="raw_table")
+            old_item_df = self.get_item_table_df(item=item, data_stack=data_stack, data_level="raw_table")
             old_item_end_date = datetime2str(old_item_df.index[-1] + timedelta(days=1))
             start_date, end_date = old_item_end_date, datetime2str(datetime.today())
             
@@ -701,7 +701,7 @@ class Database(object):
         OHLC_list = ["open", "high", "low", "close"]
         # OHLC檢查項目: 中段空值檢查、上下市日期核對、分割資料核對
         if item in OHLC_list:
-            adjust_factor_df = self.get_data_table_df(item="stock_splits", data_stack="US_stock", data_level="raw_table")
+            adjust_factor_df = self.get_item_table_df(item="stock_splits", data_stack="US_stock", data_level="raw_table")
             interval_nan_ratio = cal_interval_nan_value(item_df)
             max_abs_zscore_series = cal_return_max_abs_zscore(item_df.copy(), adjust_factor_df)
 
@@ -711,7 +711,7 @@ class Database(object):
             item_df = item_df.drop(delete_ticker_list_all, axis=1)
 
         elif item == "dividends":
-            price_df = self.get_data_table_df(item="close", data_stack="US_stock", data_level="raw_table")
+            price_df = self.get_item_table_df(item="close", data_stack="US_stock", data_level="raw_table")
             dividends_ratio_df = item_df / price_df
             max_dividends_ratio_series = dividends_ratio_df.max()
             max_dividends_ratio_series = max_dividends_ratio_series[max_dividends_ratio_series > 0.8]
@@ -756,7 +756,7 @@ class Database(object):
                 logging.info("[Check][{item}]消失標的中，共{n}檔為Russel 3000成份股，清單如下：".format(item=item, n=len(disappear_index_ticker_list)))
                 logging.info(disappear_index_ticker_list)
 
-    def get_data_table_df(self, item, data_stack="US_stock", data_level="raw_table"):
+    def get_item_table_df(self, item, data_stack="US_stock", data_level="raw_table"):
         folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level=data_level)
         filePath = os.path.join(folderPath, item+".pkl")
         df = pd.read_pickle(filePath)            
