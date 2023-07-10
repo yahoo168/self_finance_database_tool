@@ -35,8 +35,7 @@ class Database(object):
         
         self.data_path_dict = self._load_and_build_data_path(database_folderPath)
         
-        # 若某一類資料會頻繁被重複呼叫，可存放在cache_dict中 (可參考get_next_trade_date對於cache的使用方式)
-        self.cache_dict = {}
+        # 待改：API應另行統一管理
         # self.polygon_API_key = "VzFtRb0w6lQcm1HNm4dDly5fHr_xfviH" # 舊的polygon
         self.polygon_API_key = "vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj" # 新的polygon
         
@@ -114,123 +113,54 @@ class Database(object):
     
     # 資料儲存狀態相關函數（結束）
     # ——————————————————————————————————————————————————————————
-    
-
-    # ——————————————————————————————————————————————————————————
     # trade_date處理相關函數（開始）
-
-    ## 儲存trade_date，目前以yfinance中ETF有報價的日期作為交易日，美國參考SPY，台灣參考0050
-    def save_stock_trade_date(self, source="yfinance", country="US"):
-        #待改：應標記非交易日是六日or假日(holidays)，可用1、0、-1標記
-        if country=="US":
-            folderPath = self._get_data_path(data_stack="US_stock", item="trade_date", data_level="raw_data")
-            reference_ticker = "SPY"
-        
-        elif country=="TW":
-            folderPath = self._get_data_path(data_stack="TW_stock", item="trade_date", data_level="raw_data")
-            reference_ticker = "0050.TW" 
-                
-        if source=="yfinance":
-            reference_df = yf.Ticker(reference_ticker).history(period="max")
-
-        elif source=="yahoo_fin":
-            reference_df = _download_data_from_Yahoo_Fin(reference_ticker)
-
-        trade_date_series = reference_df.index.strftime("%Y-%m-%d").to_series()
-        filePath = os.path.join(folderPath, "trade_date.csv")
-        trade_date_series.to_csv(filePath, index=False)
-        logging.info("[{country} trade_date] 已儲存".format(country=country))
-
-    ## 取得交易日日期序列，國家預設為US，若不指定時間區間預設為全部取出
-    def get_trade_date_list(self, start_date=None, end_date=None, country="US"):
-        if country == "US":
-            folderPath = self._get_data_path(data_stack="US_stock", item="trade_date", data_level="raw_data")
-
-        elif country == "TW":
-            folderPath = self._get_data_path(data_stack="TW_stock", item="trade_date", data_level="raw_data")
-
-        filePath = os.path.join(folderPath, "trade_date.csv")
-        trade_date_series = pd.read_csv(filePath).squeeze()
+    
+    # 取得交易日日期序列（字串列表），國家預設為US，若不指定時間區間預設為全部取出
+    def _get_stock_trade_date_list(self, start_date=None, end_date=None, country="US"):
         # 若未給定起始/結束日期則回傳所有交易日(2000-01-01起)
-        if start_date != None or end_date != None:
-            mask = (trade_date_series >= start_date) & (trade_date_series <= end_date)
-            trade_date_series = trade_date_series[mask]
-
-        trade_date_list = trade_date_series.to_list()
-        # 待改：改為series + 考慮去除此處的cache機制
-        self.cache_dict["trade_date_list"] = trade_date_list
+        market_status_series = self._get_stock_market_status_series(start_date=start_date, end_date=end_date, country=country) 
+        # 1: 交易日, 0:六日休市, -1:非六日休市
+        trade_date_series = market_status_series[market_status_series==True]
+        trade_date_list = list(map(datetime2str, trade_date_series.index))
         return trade_date_list
     
-    def _get_market_status_df(self, start_date=None, end_date=None, country="US"):
-        data_stack = country+"_"+"stock"
-        folderPath = self._get_data_path(data_stack="US_stock", item="trade_date", data_level="raw_data")
+    # Note：須定時補新的market status，目前最新資料至2024-07-06
+    # Index為日期，Value:1: 交易日, 0:六日休市, -1:非六日休市
+    def _get_stock_market_status_series(self, start_date=None, end_date=None, country="US"):
+        if country == "US":
+            data_stack = "US_stock"
+        elif country == "TW":
+            data_stack = "TW_stock"
+
+        folderPath = self._get_data_path(data_stack=data_stack, item="trade_date", data_level="raw_data")
         filePath = os.path.join(folderPath, "trade_date.csv")
-        trade_date_series = pd.read_csv(filePath).squeeze()
+        market_status_series = pd.read_csv(filePath, index_col=0).squeeze()
+        # 原csv檔案的日期的日期為字串，格式為2000/01/01，須轉換為datetime
+        market_status_series.index = pd.DatetimeIndex(market_status_series.index)
 
-        s_date, e_date = trade_date_series.iloc[0], trade_date_series.iloc[-1]
-        date_range_series = pd.Series(pd.date_range(s_date, e_date,freq='d'))
-        market_status_df = pd.DataFrame(index=date_range_series, columns=["market_status"])
+        if start_date != None and end_date != None:
+            mask = (market_status_series.index >= start_date) & (market_status_series.index <= end_date)
+            return market_status_series[mask]
+
+        return market_status_series
+
+    # 若給定日期並非交易日，則取得距離最近的實際交易日（last：上一個，next：下一個）
+    def get_nearest_trade_date(date, country, method="last"):
+        date = str2datetime(date)
+        market_status_series = db._get_stock_market_status_series(country=country)
+        market_status = market_status_series[date]
         
-        is_weekend_series = date_range_series.apply(lambda x:x.day_name() in (['Saturday', 'Sunday']))
-        weekend_series = date_range_series[is_weekend_series]
-
-        # 1: 交易日, 0:六日休市, -1:非六日休市
-        market_status_df.loc[weekend_series, :] = 0
-        market_status_df.loc[trade_date_series, :] = 1
-        market_status_df = market_status_df.fillna(-1)
-    
-        # 若未給定起始/結束日期則回傳所有交易日(2000-01-01起)
-        if start_date != None or end_date != None:
-            mask = (market_status_df.index >= start_date) & (market_status_df.index <= end_date)
-            market_status_df = market_status_df[mask]
-
-        return market_status_df
-
-    ### 待改：get_next_trade_date與get_last_trade_date應該合併，且此函數應改為針對Table資料操作
-    
-    ## 若給定日期並非交易日，則取得距離最近的下一個實際交易日
-    def get_next_trade_date(self, date, shift_days=0, country="US"):
-        # 若輸入date為字串，先轉為datetime物件
-        if type(date) is str:
-            date = str2datetime(date)
-
-        date = date + timedelta(days=shift_days)
-        # 待改：多區域時，資料會被覆寫
-        if "trade_date_list" in self.cache_dict.keys():
-            trade_date_list = self.cache_dict["trade_date_list"]
-
-        else:
-            trade_date_list = self.get_trade_date_list(country=country)
-
-        if date not in trade_date_list:
-            virtual_date_list = trade_date_list.copy()
-            virtual_date_list.append(date)
-            virtual_date_list.sort()
-            latest_trade_date_index = virtual_date_list.index(date)
-            return trade_date_list[latest_trade_date_index]
-        else:
-            return date
-    
-    ## 若給定日期並非交易日，則取得距離最近的上一個實際交易日
-    def get_last_trade_date(self, date, shift_days=0, country="US"):
-        # 若輸入date為字串，先轉為datetime物件
-        if type(date) is str:
-            date = str2datetime(date)
-
-        date = date+timedelta(days=shift_days)
-        if "trade_date_list" in self.cache_dict.keys():
-            trade_date_list = self.cache_dict["trade_date_list"]
-        else:
-            trade_date_list = self.get_trade_date_list(country=country)
-
-        if date not in trade_date_list:
-            virtual_date_list = trade_date_list.copy()
-            virtual_date_list.append(date)
-            virtual_date_list.sort()        
-            latest_trade_date_index = virtual_date_list.index(date)
-            return trade_date_list[latest_trade_date_index-1]
-        else:
-            return date
+        if method == "last":
+            step = -1
+        elif method == "next":
+            step = 1
+        
+        while True:
+            if market_status != 1:
+                date = date - timedelta(days=step)
+                market_status = market_status_series[date]
+            else:
+                return datetime2str(date)
 
     # trade_date處理相關函數（結束）
     # ——————————————————————————————————————————————————————————
@@ -264,11 +194,10 @@ class Database(object):
         date = datetime2str(datetime.today())
         # 待改：國別管理
         folderPath = self._get_data_path(data_stack="US_stock", item=universe_name, data_level="raw_data")
-        make_folder(folderPath)
         filePath = os.path.join(folderPath, date+".csv")
         ticker_series.to_csv(filePath)
 
-    ## 取得特定日期下，特定universe的成分股列表
+    ## 取得單一日期下，特定universe的成分股list，底層函數為self._get_stock_ticker_df
     def get_stock_ticker_list(self, universe_name, date=None, exclude_delist=False, country="US"):
         if country == "US":
             data_stack = "US_stock"
@@ -279,12 +208,12 @@ class Database(object):
         if date == None:
             date = self._get_single_data_status(data_stack=data_stack, item=universe_name)["end_date"]
 
-        ticker_series = self.get_stock_ticker_df(universe_name=universe_name, start_date=date, end_date=date, 
-                                                 exclude_delist=exclude_delist, country=country).squeeze()
+        ticker_series = self._get_stock_ticker_df(universe_name=universe_name, start_date=date, end_date=date, 
+                                                  exclude_delist=exclude_delist, country=country).squeeze()
         return ticker_series.index.to_list()
 
     ## 取得特定universe的df資料，row:日期，columns:曾經存在此universe的所有ticker，value:True/False
-    def get_stock_ticker_df(self, universe_name, start_date, end_date, exclude_delist=False, country="US"):
+    def _get_stock_ticker_df(self, universe_name, start_date, end_date, exclude_delist=False, country="US"):
         def remove_delist_ticker(ticker_list):
             # BBG對下市ticker會更改為7位數字+一個字母（D或Q），如2078185D，可以此判別
             # 待改：之後應建立下市股票對照表，載明日期
@@ -298,17 +227,20 @@ class Database(object):
         
         raw_ticker_df = self._get_item_data_df_byDate(item=universe_name, data_stack=data_stack, 
                                                       start_date=start_date, end_date=end_date)
-        
+
+        # raw_data中每日儲存的為universe中的ticker序列，故須取出時間區段中所有存在過的ticker
         all_universe_ticker_series = pd.Series(raw_ticker_df.values.flatten()).drop_duplicates().dropna()
         date_list = raw_ticker_df.index.to_list()
+        # row：時間序列，column：完整的ticker序列，value：True/False
         ticker_df = pd.DataFrame(index=date_list, columns=all_universe_ticker_series)
         
+        # 參照raw_data，若ticker在當日被包含於universe中，便填寫True
         for date in date_list:
             ticker_series = raw_ticker_df.loc[date, :].dropna()
             ticker_df.loc[date, ticker_series] = True
-        
+        # 空值則補Fasle，代表該ticker當日未被包含於universe中
         ticker_df = ticker_df.fillna(False)
-
+        # 可選擇是否去除已下市股票
         if exclude_delist == True:
             ticker_list = list(ticker_df.columns)
             ticker_list = remove_delist_ticker(ticker_list)
@@ -322,18 +254,29 @@ class Database(object):
     
     # ——————————————————————————————————————————————————————————
     # 各類股票資料項目處理相關函數（開始）
+    def get_item_table_df(self, item, data_stack="US_stock", data_level="raw_table"):
+        folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level=data_level)
+        filePath = os.path.join(folderPath, item+".pkl")
+        df = pd.read_pickle(filePath)            
+        return df
     
     # 給定要取出的item_list和所在的data_stack，可指定是否對齊(align)
-    def get_item_data_df_list(self, method, item_list, data_stack, start_date=None, end_date=None, 
-                              latest_num=None, target_stock_ticker_list=None, if_align=False):
+    def get_item_data_df_list(self, method, item_list, data_stack, start_date=None, end_date=None, latest_num=None,
+                               target_stock_ticker_list=None, data_level="raw_data", if_align=False):
         item_df_list = list()
         for item in item_list:
-            if method == "byNum":
-                item_df = self._get_item_data_df_byNum(item, data_stack=data_stack, latest_num=latest_num, target_stock_ticker_list=target_stock_ticker_list)
+            if data_level == "raw_data":
+                if method == "byNum":
+                    item_df = self._get_item_data_df_byNum(item, data_stack=data_stack, latest_num=latest_num, target_stock_ticker_list=target_stock_ticker_list)
+                
+                elif method == "byDate":
+                    item_df = self._get_item_data_df_byDate(item, data_stack=data_stack, start_date=start_date, end_date=end_date, target_stock_ticker_list=target_stock_ticker_list)
             
-            elif method == "byDate":
-                item_df = self._get_item_data_df_byDate(item, data_stack=data_stack, start_date=start_date, end_date=end_date, target_stock_ticker_list=target_stock_ticker_list)
-        
+            elif (data_level == "raw_table") or (data_level == "table"):
+                folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level=data_level)
+                filePath = os.path.join(folderPath, item+".pkl")
+                df = pd.read_pickle(filePath)
+            
             item_df_list.append(item_df)
 
         if if_align == True:
@@ -341,7 +284,7 @@ class Database(object):
         else:
             return item_df_list
 
-    # 將給定的數個DataFrame對齊coloumn與index，空值補Nan
+    # 將給定的數個df，對齊coloumn與index，空值補Nan
     def _get_aligned_df_list(self, df_list):
         index_list, columns_list = list(), list()
         
@@ -459,11 +402,12 @@ class Database(object):
             data_stack = "TW_stack"
 
         if start_date == None:
+            # 若未給定起始日，則自最新一筆資料的隔日開始抓取
             start_date = self._get_single_data_status(data_stack=data_stack, item="stock_splits")["end_date"]
             start_date = datetime2str(str2datetime(start_date) + timedelta(days=1))
 
         if end_date == None:
-            # 預設會抓取至明日，因下單須預知隔日分割情況，以計算下單參考價
+            # 若未給定結束日，則預設會抓取至明日；因下單須預知隔日分割情況以計算下單參考價
             end_date = datetime2str(datetime.today() + timedelta(days=1))
 
         folderPath = self._get_data_path(data_stack=data_stack, item="stock_splits", data_level="raw_data")
@@ -471,13 +415,13 @@ class Database(object):
             save_stock_split_from_Polygon(folderPath, self.polygon_API_key, start_date=start_date, end_date=end_date)    
     
     ## 取得調整因子df，預設為backward（使當前adjclose等同於close）
-    def _get_adjust_factor_df(self, start_date=None, end_date=None, country="US", method="backward"):
+    def _get_stock_adjust_factor_df(self, start_date=None, end_date=None, country="US", method="backward"):
         if country == "US":
             data_stack = "US_stock"
         elif country == "TW":
             data_stack = "TW_stock"
 
-        trade_date_list = self.get_trade_date_list(start_date=start_date, end_date=end_date, country=country)
+        trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date, country=country)
         stock_splits_df = self._get_item_data_df_byDate(item="stock_splits", data_stack=data_stack, start_date=start_date, end_date=end_date)
         adjust_factor_df = cal_adjust_factor_df(stock_splits_df, date_list=trade_date_list, method=method)
         return adjust_factor_df
@@ -506,7 +450,7 @@ class Database(object):
         
         elif source == "yfinance":
             cache_folderPath = os.path.join(self.cache_folderPath, "yfinance_priceVolume")
-            #待改：cache統一管理
+            #待改：cache folder須統一管理
             make_folder(cache_folderPath)
             save_stock_priceVolume_from_yfinance(folderPath, cache_folderPath, start_date, end_date, ticker_list, country, adjust)
 
@@ -544,7 +488,8 @@ class Database(object):
             logging.warning("[{date}]資料已更新至今日，預設無須進行更新，若須強制更新須輸入起始/結束參數".format(date=start_date))
 
         price_df = self._get_item_data_df_byDate(item=price_item, data_stack=data_stack, start_date=start_date, end_date=end_date)
-        adjust_factor_df = self._get_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+        adjust_factor_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+        
         # 只針對有分割資料的個股作股價調整
         adjust_ticker_list = price_df.columns.intersection(adjust_factor_df.columns)        
         adjusted_item_df = price_df[adjust_ticker_list] * adjust_factor_df
@@ -559,7 +504,7 @@ class Database(object):
             price_df[dividends_ticker_list] = adjusted_dividends_df[dividends_ticker_list]
         
         logging.info("[daily return][{method}] 資料計算中".format(method=method))
-        # 去除第一row
+        # 去除第一row：因取pct後為空值
         return_df = price_df.pct_change().iloc[1:,:]
         # 切分return
         for i in range(len(return_df)):
@@ -601,12 +546,15 @@ class Database(object):
         if end_date == None:
             end_date = datetime2str(datetime.today())
 
-        data_stack = country+"_"+"stock"
+        if country == "US":
+            data_stack = "US_stock"
+        elif country == "TW":
+            data_stack = "TW_stock"
+            
         folderPath = self._get_data_path(data_stack=data_stack, item="shares_outstanding", data_level="raw_data")
         if source == "polygon":
             cache_folderPath = os.path.join(self.cache_folderPath, "polygon_shares_outstanding")
-            make_folder(cache_folderPath)
-            trade_date_list = self.get_trade_date_list(start_date=start_date, end_date=end_date, country=country)
+            trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date, country=country)
             save_stock_shares_outstanding_from_Polygon(folderPath, cache_folderPath, self.polygon_API_key, ticker_list, trade_date_list, start_date, end_date)
     
     # 將各類股票資料的raw_data轉化為raw_table並儲存
@@ -630,13 +578,13 @@ class Database(object):
 
             # 部分資料組合為塊狀資料後，尚須額外處理，如adjust_factor, universe_ticker...等
             if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
-                item_df = self.get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
+                item_df = self._get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
             
             # raw data中stock_splits為該日有分割才有資料，在轉化為raw table時進行補日期 & 計算調整係數
             elif item == "stock_splits":
-                item_df = self._get_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+                item_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
             elif item == "trade_date":
-                item_df = self._get_market_status_df(start_date=start_date, end_date=end_date, country=country)
+                item_df = self._get_stock_market_status_series(start_date=start_date, end_date=end_date, country=country)
             else:
                 item_df = self._get_item_data_df_byDate(item=item, data_stack=data_stack, start_date=start_date, end_date=end_date)
 
@@ -659,11 +607,11 @@ class Database(object):
             start_date, end_date = old_item_end_date, datetime2str(datetime.today())
             
             if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
-                item_df = self.get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
+                item_df = self._get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
             elif item == "stock_splits":
-                item_df = self._get_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+                item_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
             elif item == "trade_date":
-                item_df = self._get_market_status_df(start_date=start_date, end_date=end_date, country=country)
+                item_df = self._get_stock_market_status_series(start_date=start_date, end_date=end_date, country=country)
             else:
                 item_df = self._get_item_data_df_byDate(item=item, data_stack=data_stack, start_date=start_date, end_date=end_date)
 
@@ -674,7 +622,7 @@ class Database(object):
             old_item_df = old_item_df.T.drop_duplicates().T
             item_df = pd.concat([item_df, old_item_df]).sort_index()
             # 確認合併後的資料區間是否已涵蓋該區間內的所有交易日
-            trade_date_list = self.get_trade_date_list(start_date=start_date, end_date=end_date)
+            trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date)
             item_df_index = list(map(lambda x:datetime2str(x), item_df.index))
             interval_trade_date = list(set(trade_date_list) - set(item_df_index))
 
@@ -755,12 +703,6 @@ class Database(object):
             if len(disappear_index_ticker_list) > 0:
                 logging.info("[Check][{item}]消失標的中，共{n}檔為Russel 3000成份股，清單如下：".format(item=item, n=len(disappear_index_ticker_list)))
                 logging.info(disappear_index_ticker_list)
-
-    def get_item_table_df(self, item, data_stack="US_stock", data_level="raw_table"):
-        folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level=data_level)
-        filePath = os.path.join(folderPath, item+".pkl")
-        df = pd.read_pickle(filePath)            
-        return df
     
     # 待新增的資料項目：基本面資料、總經資料
     def save_stock_financialReport_data(self, ticker_list=None, start_date=None, end_date=None, 
@@ -769,11 +711,8 @@ class Database(object):
             ticker_list = self.get_stock_ticker_list("US_all")
 
         if start_date == None:
-            status_df = self.get_data_status(["revenues"], country=country, data_class="stock")
-            #待改：目前以「revenues」的資料儲存狀況作為判斷最新資料更新日期，應改為config
-            start_date = status_df.at["revenues", "end_date"]
-            start_date = str2datetime(start_date) + timedelta(days=1)
-            start_date = datetime2str(start_date)
+            start_date = str2datetime(self._get_single_data_status(data_stack=data_stack, item="revenues")["end_date"])
+            start_date = datetime2str(start_date + timedelta(days=1))
 
         if end_date == None:
             end_date = datetime2str(datetime.today())

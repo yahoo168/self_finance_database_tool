@@ -282,6 +282,28 @@ def _save_blockData_to_seriesData(folderPath, df, item, com_prev_data):
         fileName = os.path.join(item_folderPath, date+".csv")
         data_series.to_csv(fileName)
 
+# 約一年執行一次，待改：未給明路徑
+def save_stock_market_status_series(self):
+    url = "https://api.polygon.io/v1/marketstatus/upcoming?apiKey=vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj"
+    data_json = requests.get(url).json()
+    holiday_status_df = df = pd.DataFrame(data_json)
+    closed_status_df = df[df["status"]=="closed"]
+    holiday_series = closed_status_df["date"].drop_duplicates()
+
+    start_date = datetime2str(datetime.today())
+    end_date = datetime2str(datetime.today()+timedelta(days=365))
+
+    date_range_series = pd.Series(pd.date_range(start_date, end_date, freq='d'))
+    market_status_df = pd.DataFrame(index=date_range_series, columns=["market_status"])
+            
+    is_weekend_series = date_range_series.apply(lambda x:x.day_name() in (['Saturday', 'Sunday']))
+    weekend_series = date_range_series[is_weekend_series]
+
+    # 1: 交易日, 0:六日休市, -1:非六日休市
+    market_status_series.loc[weekend_series, :] = 0
+    market_status_series.loc[holiday_series, :] = -1
+    market_status_series = market_status_series.fillna(1)
+    return market_status_series
 
 ### 基本面資料流程
 # 1. 一次性歷史資料抓取（依照filing date抓）

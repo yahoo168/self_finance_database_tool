@@ -145,3 +145,26 @@ def compare_component(s1, s2):
     #     make_folder(self.table_US_stock_folderPath)
     #     make_folder(self.table_TW_stock_folderPath)
     #     make_folder(self.table_macro_folderPath)
+
+
+## 儲存trade_date，目前以yfinance中ETF有報價的日期作為交易日，美國參考SPY，台灣參考0050
+# def save_stock_trade_date(self, source="yfinance", country="US"):
+#     #待改：應標記非交易日是六日or假日(holidays)，可用1、0、-1標記
+#     if country == "US":
+#         folderPath = self._get_data_path(data_stack="US_stock", item="trade_date", data_level="raw_data")
+#         reference_ticker = "SPY"
+    
+#     elif country == "TW":
+#         folderPath = self._get_data_path(data_stack="TW_stock", item="trade_date", data_level="raw_data")
+#         reference_ticker = "0050.TW" 
+            
+#     if source == "yfinance":
+#         reference_df = yf.Ticker(reference_ticker).history(period="max")
+
+#     elif source == "yahoo_fin":
+#         reference_df = _download_data_from_Yahoo_Fin(reference_ticker)
+
+#     trade_date_series = reference_df.index.strftime("%Y-%m-%d").to_series()
+#     filePath = os.path.join(folderPath, "trade_date.csv")
+#     trade_date_series.to_csv(filePath, index=False)
+#     logging.info("[{country} trade_date] 已儲存".format(country=country))
