@@ -33,21 +33,29 @@ class Database(object):
         self.table_folderPath = os.path.join(database_folderPath, "table")
         self.cache_folderPath = os.path.join(database_folderPath, "cache")
         
-        self.data_path_dict = self._load_and_build_data_path(database_folderPath)
+        self.data_path_dict, self.data_path_df_dict = self._load_and_build_data_path(database_folderPath)
         
         # 待改：API應另行統一管理
         # self.polygon_API_key = "VzFtRb0w6lQcm1HNm4dDly5fHr_xfviH" # 舊的polygon
         self.polygon_API_key = "vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj" # 新的polygon
-        
+    
+    def _filter_item_by_layer(self, data_stack, criteria_dict):
+        data_path_df = self.data_path_df_dict[data_stack]
+        for key, value in criteria_dict.items():
+            data_path_df = data_path_df[data_path_df[key]==value]
+        return list(data_path_df.index)
+
     def _load_and_build_data_path(self, database_folderPath):
         # 已註冊之資料集
         data_stack_list = ["US_stock"]
         data_path_dict = {key: dict() for key in data_stack_list}
-        
+        data_path_df_dict = {key: dict() for key in data_stack_list}
+
         # 依照資料集的path檔，建構data_path_dict
         for data_stack in data_stack_list:
             filePath = os.path.join(database_folderPath, "data_path", data_stack+".xlsx")
             path_df = pd.read_excel(filePath, index_col=0).drop("type", axis=1)
+            data_path_df_dict[data_stack] = path_df
             for i in range(len(path_df)):
                 path_series = path_df.iloc[i,:]
                 item, path_list = path_series.name, list(path_series.dropna())
@@ -65,7 +73,7 @@ class Database(object):
 
         # cache應該也要納入統一管理，待改
         make_folder(self.cache_folderPath)
-        return data_path_dict
+        return data_path_dict, data_path_df_dict
     
     # ——————————————————————————————————————————————————————————
     # 資料儲存狀態相關函數（開始）
@@ -77,6 +85,15 @@ class Database(object):
             return os.path.join(self.raw_table_folderPath, data_stack, item_folderPath)
         elif data_level == "table":
             return os.path.join(self.table_folderPath, data_stack, item_folderPath)
+
+    #取得整個data_stack中每個item的完整資料夾地址（通常用於傳遞給外部爬蟲函數）
+    def _get_data_path_dict(self, data_stack, data_level="raw_data"):
+        data_path_dict = dict()
+        for item, data_path in self.data_path_dict[data_stack].items():
+            if data_level == "raw_data":
+                data_path = os.path.join(self.raw_data_folderPath, data_stack, data_path)
+            data_path_dict[item] = data_path
+        return data_path_dict
 
     ## 取得單一資料項目的儲存狀況：起始日期/最新更新日期/資料筆數，回傳dict
     def _get_single_data_status(self, data_stack, item, data_level="raw_data"):
@@ -144,20 +161,24 @@ class Database(object):
 
         return market_status_series
 
-    # 若給定日期並非交易日，則取得距離最近的實際交易日（last：上一個，next：下一個）
-    def get_nearest_trade_date(date, country, method="last"):
+    # 取得距離給定日最近的實際交易日（last：上一個，next：下一個），cal_self可選擇給定的日期本身是否算作交易日
+    def get_closest_trade_date(self, date, country="US", direction="last", cal_self=True):
         date = str2datetime(date)
-        market_status_series = db._get_stock_market_status_series(country=country)
-        market_status = market_status_series[date]
+        market_status_series = self._get_stock_market_status_series(country=country)
         
-        if method == "last":
+        if cal_self == True:
+            market_status = market_status_series[date]
+        else:
+            market_status = 0
+        
+        if direction == "last":
             step = -1
-        elif method == "next":
+        elif direction == "next":
             step = 1
         
         while True:
             if market_status != 1:
-                date = date - timedelta(days=step)
+                date = date + timedelta(days=step)
                 market_status = market_status_series[date]
             else:
                 return datetime2str(date)
@@ -525,17 +546,18 @@ class Database(object):
             start_date = datetime2str(str2datetime(start_date) + timedelta(days=1))
 
         if end_date == None:
-            end_date = datetime2str(datetime.today() + timedelta(days=1))
+            end_date = datetime2str(datetime.today()+timedelta(days=1))
         
         # 待改，資料源管理
-        folderPath = self._get_data_path(data_stack=data_stack, item="ex_dividends", data_level="raw_data")
-        save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, data_type="ex_dividend_date")
+        #folderPath = self._get_data_path(data_stack=data_stack, item="ex_dividends", data_level="raw_data")
+        #save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="ex_dividend_date")
         
-        # folderPath = self._get_data_path(data_stack="US_stock", item="declaration_dividends", data_level="raw_data")
-        # save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, data_type="declaration_date")
+        # 因同一天公司可能會宣布N筆股利（不同發放日），較難儲存故先略過
+        #folderPath = self._get_data_path(data_stack="US_stock", item="declaration_dividends", data_level="raw_data")
+        #save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="declaration_date")
         
-        # folderPath = self._get_data_path(data_stack="US_stock", item="pay_dividends", data_level="raw_data")
-        # save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, data_type="pay_date")
+        folderPath = self._get_data_path(data_stack=data_stack, item="pay_dividends", data_level="raw_data")
+        save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="pay_date")
         
     # 儲存流通股數raw_data
     def save_stock_shares_outstanding(self, ticker_list=None, start_date=None, end_date=None, source="polygon", country="US"):
@@ -550,7 +572,7 @@ class Database(object):
             data_stack = "US_stock"
         elif country == "TW":
             data_stack = "TW_stock"
-            
+
         folderPath = self._get_data_path(data_stack=data_stack, item="shares_outstanding", data_level="raw_data")
         if source == "polygon":
             cache_folderPath = os.path.join(self.cache_folderPath, "polygon_shares_outstanding")
@@ -707,8 +729,8 @@ class Database(object):
     # 待新增的資料項目：基本面資料、總經資料
     def save_stock_financialReport_data(self, ticker_list=None, start_date=None, end_date=None, 
                                     item_list=None, source="polygon", country="US"):
-        if ticker_list == None:
-            ticker_list = self.get_stock_ticker_list("US_all")
+        # if ticker_list == None:
+        #     ticker_list = self.get_stock_ticker_list("univ_us_all")
 
         if start_date == None:
             start_date = str2datetime(self._get_single_data_status(data_stack=data_stack, item="revenues")["end_date"])
@@ -717,14 +739,16 @@ class Database(object):
         if end_date == None:
             end_date = datetime2str(datetime.today())
 
-        if country == "US":
-            folderPath = self.raw_data_US_stock_folderPath
-        else:
-            pass
-
         if source == "polygon":
-            save_stock_financialReport_from_Polygon(folderPath, ticker_list, start_date, end_date)
-    
+            # stock_trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date, country="US")
+            # print(stock_trade_date_list)
+            if country == "US":
+                folderPath_dict = self._get_data_path_dict(data_stack="US_stock")
+            elif  country == "TW":
+                folderPath_dict = self._get_data_path_dict(data_stack="TW_stock")
+
+            save_stock_financialReport_data_from_Polygon(folderPath_dict=folderPath_dict, API_key=self.polygon_API_key, start_date=start_date, end_date=end_date)
+            
     # 取得FRED官網公布的總經數據，name的可用選項，見Macro/Token_trans/fred.txt
     # def get_fred_data(self, name):
     #     folderPath = self.raw_data_macro_folderPath
