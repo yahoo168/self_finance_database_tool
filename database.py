@@ -28,34 +28,39 @@ class Database(object):
     '''
     def __init__(self, database_folderPath):
         # 最上層之資料夾
+        self.database_folderPath = database_folderPath
+        self.data_path_folderPath = os.path.join(database_folderPath, "data_path")
         self.raw_data_folderPath = os.path.join(database_folderPath, "raw_data")
         self.raw_table_folderPath = os.path.join(database_folderPath, "raw_table")
         self.table_folderPath = os.path.join(database_folderPath, "table")
         self.cache_folderPath = os.path.join(database_folderPath, "cache")
-        
-        self.data_path_dict, self.data_path_df_dict = self._load_and_build_data_path(database_folderPath)
+        self.data_stack_list = ["US_stock"]
+        self.data_path_dict = self._load_and_build_data_path()
         
         # 待改：API應另行統一管理
         # self.polygon_API_key = "VzFtRb0w6lQcm1HNm4dDly5fHr_xfviH" # 舊的polygon
         self.polygon_API_key = "vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj" # 新的polygon
     
-    def _filter_item_by_layer(self, data_stack, criteria_dict):
-        data_path_df = self.data_path_df_dict[data_stack]
+    def _get_item_list_by_layer(self, data_stack, criteria_dict=dict()):
+        filePath = os.path.join(self.data_path_folderPath, data_stack+".xlsx")
+        path_df = pd.read_excel(filePath, index_col=0)
+
+        # path_df = path_df[path_df["type"]!= "folder"]
+        # path_df = path_df[path_df["type"]!= "block"]
+        path_df = path_df[path_df["type"]== "series"]
         for key, value in criteria_dict.items():
-            data_path_df = data_path_df[data_path_df[key]==value]
-        return list(data_path_df.index)
+            path_df = path_df[path_df[key]==value]
 
-    def _load_and_build_data_path(self, database_folderPath):
+        return list(path_df.index)
+
+    def _load_and_build_data_path(self):
         # 已註冊之資料集
-        data_stack_list = ["US_stock"]
-        data_path_dict = {key: dict() for key in data_stack_list}
-        data_path_df_dict = {key: dict() for key in data_stack_list}
-
+        data_path_dict = {key: dict() for key in self.data_stack_list}
         # 依照資料集的path檔，建構data_path_dict
-        for data_stack in data_stack_list:
-            filePath = os.path.join(database_folderPath, "data_path", data_stack+".xlsx")
+        for data_stack in self.data_stack_list:
+            filePath = os.path.join(self.data_path_folderPath, data_stack+".xlsx")
             path_df = pd.read_excel(filePath, index_col=0).drop("type", axis=1)
-            data_path_df_dict[data_stack] = path_df
+
             for i in range(len(path_df)):
                 path_series = path_df.iloc[i,:]
                 item, path_list = path_series.name, list(path_series.dropna())
@@ -65,15 +70,15 @@ class Database(object):
         # 依照data_path_dict，建構資料夾（每級data level皆有相同結構）
         data_level_list = ["raw_data", "raw_table", "table"]
         for data_level in data_level_list:
-            for data_stack in data_stack_list:
+            for data_stack in self.data_stack_list:
                 sub_path_dict = data_path_dict[data_stack]
                 for sub_path in list(sub_path_dict.values()):
-                    folderPath = os.path.join(database_folderPath, data_level, data_stack, sub_path)
+                    folderPath = os.path.join(self.database_folderPath, data_level, data_stack, sub_path)
                     make_folder(folderPath)
 
         # cache應該也要納入統一管理，待改
         make_folder(self.cache_folderPath)
-        return data_path_dict, data_path_df_dict
+        return data_path_dict
     
     # ——————————————————————————————————————————————————————————
     # 資料儲存狀態相關函數（開始）
@@ -87,6 +92,7 @@ class Database(object):
             return os.path.join(self.table_folderPath, data_stack, item_folderPath)
 
     #取得整個data_stack中每個item的完整資料夾地址（通常用於傳遞給外部爬蟲函數）
+    #待改：應該透過_get_data_path呼喚
     def _get_data_path_dict(self, data_stack, data_level="raw_data"):
         data_path_dict = dict()
         for item, data_path in self.data_path_dict[data_stack].items():
@@ -127,6 +133,20 @@ class Database(object):
             sub_status_dict = self._get_single_data_status(data_stack=data_stack, item=item, data_level="raw_data")
             status_dict[item] = sub_status_dict
         return pd.DataFrame(status_dict).T
+
+    # 給定結束日與資料筆數，回傳對應的起始日
+    def _get_start_date_by_num(self, item, data_stack, end_date, num):
+        item_folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_data")
+        raw_date_list = os.listdir(item_folderPath)
+        date_list = [date.split(".")[0] for date in raw_date_list]
+        # 去除異常空值（由隱藏檔所導致）
+        date_list = [date for date in date_list if len(date)!=0]
+        date_series = pd.Series(date_list)
+        date_series = date_series.apply(lambda x:str2datetime(x)).sort_values().reset_index(drop=True)
+        date_series = date_series[date_series <= end_date]
+        # 依照結束日截取N筆資料，回傳起始日
+        start_date = datetime2str(list(date_series.iloc[-num:,])[0])
+        return start_date
     
     # 資料儲存狀態相關函數（結束）
     # ——————————————————————————————————————————————————————————
@@ -190,33 +210,19 @@ class Database(object):
     # Universe_ticker處理相關函數（開始）
     
     ## 儲存當前正在交易的所有ticker，預設資料源：polygon
-    def save_stock_ticker_list(self, universe_name="US_all", source="polygon"):
-        # 待改：多資料源管理
-        if universe_name=="US_all" and source=="polygon":
-            ticker_list, letter_list = list(), list(string.ascii_uppercase)
-            interval_letter_list = list()
-            for i in range(len(letter_list)-1):
-                interval_letter_list.append([letter_list[i], letter_list[i+1]])
-            
-            for interval in interval_letter_list[:1]:
-                interval_ticker_list = list()
-                start_letter, end_letter = interval[0], interval[1]
-                # 限定爬取普通股 & ETF的所有ticker，因polygon尚包含其餘資產ticker，如warrant...等
-                for ticker_type in ["CS", "ETF"]:
-                    url = "https://api.polygon.io/v3/reference/tickers?type={}&market=stocks&active=true&limit=1000&apiKey=VzFtRb0w6lQcm1HNm4dDly5fHr_xfviH&ticker.gte={}&ticker.lt={}" \
-                          .format(ticker_type, start_letter, end_letter)
-                    data_json = requests.get(url).json()
-                    interval_ticker_list.extend(pd.DataFrame(data_json["results"])["ticker"].to_list())
-                
-                logging.info("{}:標的列表下載，字段區間[{}~{}]共{}檔標的".format(universe_name, start_letter, end_letter, len(interval_ticker_list)))
-                ticker_list.extend(interval_ticker_list)
-                ticker_series = pd.Series(list(set(ticker_list)))
+    def save_stock_universe_list(self, universe_name="univ_us_stock", source="polygon"):
+        if source=="polygon":
+            if universe_name=="univ_us_stock":
+                universe_type = "CS"
+            elif universe_name=="univ_us_etf":
+                universe_type = "ETF"
+            ticker_list = save_stock_universe_list_from_polygon(universe_type=universe_type, API_key=self.polygon_API_key)
         
         date = datetime2str(datetime.today())
-        # 待改：國別管理
         folderPath = self._get_data_path(data_stack="US_stock", item=universe_name, data_level="raw_data")
         filePath = os.path.join(folderPath, date+".csv")
-        ticker_series.to_csv(filePath)
+        pd.Series(ticker_list).to_csv(filePath)
+        logging.info("[{universe_name}]成分股資料儲存完成".format(universe_name=universe_name))
 
     ## 取得單一日期下，特定universe的成分股list，底層函數為self._get_stock_ticker_df
     def get_stock_ticker_list(self, universe_name, date=None, exclude_delist=False, country="US"):
@@ -246,7 +252,7 @@ class Database(object):
         elif country == "TW":
             data_stack = "TW_stock"
         
-        raw_ticker_df = self._get_item_data_df_byDate(item=universe_name, data_stack=data_stack, 
+        raw_ticker_df = self._get_item_data_df_by_date(item=universe_name, data_stack=data_stack, 
                                                       start_date=start_date, end_date=end_date)
 
         # raw_data中每日儲存的為universe中的ticker序列，故須取出時間區段中所有存在過的ticker
@@ -288,10 +294,10 @@ class Database(object):
         for item in item_list:
             if data_level == "raw_data":
                 if method == "byNum":
-                    item_df = self._get_item_data_df_byNum(item, data_stack=data_stack, latest_num=latest_num, target_stock_ticker_list=target_stock_ticker_list)
+                    item_df = self._get_item_data_df_by_date_byNum(item, data_stack=data_stack, latest_num=latest_num, target_stock_ticker_list=target_stock_ticker_list)
                 
                 elif method == "byDate":
-                    item_df = self._get_item_data_df_byDate(item, data_stack=data_stack, start_date=start_date, end_date=end_date, target_stock_ticker_list=target_stock_ticker_list)
+                    item_df = self._get_item_data_df_by_date(item, data_stack=data_stack, start_date=start_date, end_date=end_date, target_stock_ticker_list=target_stock_ticker_list)
             
             elif (data_level == "raw_table") or (data_level == "table"):
                 folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level=data_level)
@@ -324,48 +330,8 @@ class Database(object):
 
         return aligned_item_df_list
     
-    # 取得最新K筆資料
-    def _get_item_data_df_byNum(self, item, data_stack, latest_num=1, target_stock_ticker_list=None):
-        df_list = list()
-        item_folderPath = self._get_data_path(item=item, data_stack=data_stack, data_level="raw_data")
-        # 取得指定資料夾中所有檔案名(以時間戳記命名）
-        raw_date_list = os.listdir(item_folderPath)
-        # 去除檔案名中的後綴名（.csv)
-        date_list = [date.split(".")[0] for date in raw_date_list]
-        # 去除異常空值（可能由.DS_store等隱藏檔所導致）
-        date_list = [date for date in date_list if len(date) != 0]
-        # 將時間戳記組合成date series，以篩選出指定的資料區間（同時進行排序與重設index）
-        date_series = pd.Series(date_list).apply(lambda x:str2datetime(x)).sort_values().reset_index(drop=True)
-        # 將date series轉為將date list（字串列表），以用於後續讀取資料
-        date_list = list(map(lambda x:datetime2str(x), date_series[-latest_num:]))
-        # 依照date list逐日取出每日資料，並組合為DataFrame
-        df_list = list()
-        for date in date_list:
-            fileName = os.path.join(item_folderPath, date+".csv")
-            df = pd.read_csv(fileName, index_col=0)
-            df_list.append(df)
-
-        df = pd.concat(df_list, axis=1).T
-        # 對Index以日期序列賦值並排序
-        df.index = pd.to_datetime(date_list)
-        df = df.sort_index()
-
-        # 若不指定ticker，則預設為全部取出
-        if target_stock_ticker_list == None:
-            return df
-        # 若指定ticker，比對取出的資料所包含的ticker與目標ticker是否存在差距
-        else:
-            lost_ticker_list = list(set(target_stock_ticker_list) - set(df.columns))
-            # 篩選出目標ticker與資料庫ticker的交集，以避免loc報錯
-            re_target_stock_ticker_list = list(set(target_stock_ticker_list) - set(lost_ticker_list))
-            if len(lost_ticker_list) > 0:
-                logging.warning("資料項目:{}共{}檔標的缺失，缺失標的如下:".format(item, len(lost_ticker_list)))
-                logging.warning(lost_ticker_list)
-
-            return df.loc[:, re_target_stock_ticker_list]
-    
     ## 將時序資料取出組合為DataFrame
-    def _get_item_data_df_byDate(self, item, data_stack="US_stock", target_stock_ticker_list=None, start_date=None, end_date=None, pre_fetch_nums=0):
+    def _get_item_data_df_by_date(self, item, data_stack="US_stock", target_stock_ticker_list=None, start_date=None, end_date=None, pre_fetch_nums=0):
         item_folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_data")
 
         # 待改：應該直接使用dateime?
@@ -443,7 +409,7 @@ class Database(object):
             data_stack = "TW_stock"
 
         trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date, country=country)
-        stock_splits_df = self._get_item_data_df_byDate(item="stock_splits", data_stack=data_stack, start_date=start_date, end_date=end_date)
+        stock_splits_df = self._get_item_data_df_by_date(item="stock_splits", data_stack=data_stack, start_date=start_date, end_date=end_date)
         adjust_factor_df = cal_adjust_factor_df(stock_splits_df, date_list=trade_date_list, method=method)
         return adjust_factor_df
 
@@ -508,17 +474,19 @@ class Database(object):
         if start_date == end_date:
             logging.warning("[{date}]資料已更新至今日，預設無須進行更新，若須強制更新須輸入起始/結束參數".format(date=start_date))
 
-        price_df = self._get_item_data_df_byDate(item=price_item, data_stack=data_stack, start_date=start_date, end_date=end_date)
+            return 0
+
+        price_df = self._get_item_data_df_by_date(item=price_item, data_stack=data_stack, start_date=start_date, end_date=end_date)
         adjust_factor_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
         
         # 只針對有分割資料的個股作股價調整
         adjust_ticker_list = price_df.columns.intersection(adjust_factor_df.columns)        
         adjusted_item_df = price_df[adjust_ticker_list] * adjust_factor_df
-        # 若不給定ticker_list，會導致對賦值時，columns沒有對齊
+        # 若不給定ticker_list，會導致賦值時，columns沒有對齊
         price_df[adjust_ticker_list] = adjusted_item_df[adjust_ticker_list]
         # 將股價加上當日除息的現金股利
         if cal_dividend == True:
-            dividends_df = self._get_item_data_df_byDate(item="ex_dividends", data_stack=data_stack, start_date=start_date, end_date=end_date)
+            dividends_df = self._get_item_data_df_by_date(item="ex_dividends", data_stack=data_stack, start_date=start_date, end_date=end_date)
             dividends_df = dividends_df.fillna(0)
             dividends_ticker_list = price_df.columns.intersection(dividends_df.columns)
             adjusted_dividends_df = price_df[dividends_ticker_list] + dividends_df[dividends_ticker_list]
@@ -580,24 +548,18 @@ class Database(object):
             save_stock_shares_outstanding_from_Polygon(folderPath, cache_folderPath, self.polygon_API_key, ticker_list, trade_date_list, start_date, end_date)
     
     # 將各類股票資料的raw_data轉化為raw_table並儲存
-    def trans_stock_item_raw_data_to_raw_table(self, item_list, start_date=None, end_date=None, country="US"):
+    def get_stock_item_df_dict(self, item_list, start_date=None, end_date=datetime2str(datetime.today()), 
+                                    num=None, method="by_date", country="US", if_align=False, if_save=False):
         if country == "US":
             data_stack = "US_stock"
         elif country == "TW":
             data_stack = "TW_stock"
-        
-        for item in item_list:
-            #若不指定起始日，則自該資料所儲存之最早日期，開始合成
-            if start_date == None:
-                status_dict = self._get_single_data_status(data_stack=data_stack, item=item)
-                if status_dict["date_num"] == 0:
-                    logging.warning("[{item}] 資料不存在，無法轉化為Table型態".format(item=item))
-                    continue
-                start_date = status_dict["start_date"]
                     
-            if end_date == None:
-                end_date = datetime2str(datetime.today())
-
+        item_df_list = list()
+        for item in item_list:
+            if method=="by_num":
+                start_date = self._get_start_date_by_num(item=item, data_stack=data_stack, end_date=end_date, num=num)
+            
             # 部分資料組合為塊狀資料後，尚須額外處理，如adjust_factor, universe_ticker...等
             if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
                 item_df = self._get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
@@ -605,60 +567,70 @@ class Database(object):
             # raw data中stock_splits為該日有分割才有資料，在轉化為raw table時進行補日期 & 計算調整係數
             elif item == "stock_splits":
                 item_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+            
             elif item == "trade_date":
                 item_df = self._get_stock_market_status_series(start_date=start_date, end_date=end_date, country=country)
-            else:
-                item_df = self._get_item_data_df_byDate(item=item, data_stack=data_stack, start_date=start_date, end_date=end_date)
-
-            folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_table")            
-            filePath = os.path.join(folderPath, item+".pkl")
-            item_df.to_pickle(filePath)
-            logging.info("[{item}][{start_date}-{end_date}] Raw Table資料轉換&儲存完成".format(item=item, 
-                                start_date=datetime2str(item_df.index[0]), end_date=datetime2str(item_df.index[-1])))
-    
-    # 更新各類股票資料的raw_table，# 若為update模式，將原存在的merged_table與新讀取的資料進行合併
-    def update_stock_item_raw_table(self, item_list, country="US"):
-        if country == "US":
-            data_stack = "US_stock"
-        elif country == "TW":
-            data_stack = "TW_stock"
-
-        for item in item_list:
-            old_item_df = self.get_item_table_df(item=item, data_stack=data_stack, data_level="raw_table")
-            old_item_end_date = datetime2str(old_item_df.index[-1] + timedelta(days=1))
-            start_date, end_date = old_item_end_date, datetime2str(datetime.today())
             
-            if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
-                item_df = self._get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
-            elif item == "stock_splits":
-                item_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
-            elif item == "trade_date":
-                item_df = self._get_stock_market_status_series(start_date=start_date, end_date=end_date, country=country)
             else:
-                item_df = self._get_item_data_df_byDate(item=item, data_stack=data_stack, start_date=start_date, end_date=end_date)
+                item_df = self._get_item_data_df_by_date(item=item, data_stack=data_stack, start_date=start_date, end_date=end_date)
 
-            # 確認新、舊資料row和column皆未重複，避免concat時報錯
-            #item_df = item_df.drop_duplicates()
-            item_df = item_df.T.drop_duplicates().T
-            #old_item_df = old_item_df.drop_duplicates()
-            old_item_df = old_item_df.T.drop_duplicates().T
-            item_df = pd.concat([item_df, old_item_df]).sort_index()
-            # 確認合併後的資料區間是否已涵蓋該區間內的所有交易日
-            trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date)
-            item_df_index = list(map(lambda x:datetime2str(x), item_df.index))
-            interval_trade_date = list(set(trade_date_list) - set(item_df_index))
+            item_df_list.append(item_df)
 
-            # 待改：應補充
-            # if len(interval_trade_date) > 0:
-            #     logging.warning("[{item}] 合併後資料區間未涵蓋部分交易日，已略過此資料項目之Raw Table轉換".format(item=item))
-            #     logging.warning("[{item}] 缺漏之交易日，列表如下：{interval_trade_date}".format(item=item, interval_trade_date=sorted(interval_trade_date)))
-            #     continue
+            if if_save == True:
+                folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_table")            
+                filePath = os.path.join(folderPath, item+".pkl")
+                item_df.to_pickle(filePath)
+
+        if if_align == True:
+            item_df_list = self._get_aligned_df_list(item_df_list)
+
+        # logging.info("[{item}][{start_date}-{end_date}] Raw Table資料轉換&儲存完成".format(item=item, 
+        #             start_date=datetime2str(item_df.index[0]), end_date=datetime2str(item_df.index[-1])))
+        return dict(zip(item_list, item_df_list))
+
+    # # 更新各類股票資料的raw_table，# 若為update模式，將原存在的merged_table與新讀取的資料進行合併
+    # def update_stock_item_raw_table(self, item_list, country="US"):
+    #     if country == "US":
+    #         data_stack = "US_stock"
+    #     elif country == "TW":
+    #         data_stack = "TW_stock"
+
+    #     for item in item_list:
+    #         old_item_df = self.get_item_table_df(item=item, data_stack=data_stack, data_level="raw_table")
+    #         old_item_end_date = datetime2str(old_item_df.index[-1] + timedelta(days=1))
+    #         start_date, end_date = old_item_end_date, datetime2str(datetime.today())
             
-            folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_table")
-            filePath = os.path.join(folderPath, item+".pkl")
-            item_df.to_pickle(filePath)
-            logging.info("[{item}][{start_date}-{end_date}] Raw Table資料轉換&儲存完成".format(item=item, 
-                            start_date=datetime2str(item_df.index[0]), end_date=datetime2str(item_df.index[-1])))
+    #         if item in ["univ_ray3000", "univ_ndx100", "univ_dow30", "univ_spx500"]:
+    #             item_df = self._get_stock_ticker_df(universe_name=item, start_date=start_date, end_date=end_date, exclude_delist=False)
+    #         elif item == "stock_splits":
+    #             item_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, country=country, method="backward")
+    #         elif item == "trade_date":
+    #             item_df = self._get_stock_market_status_series(start_date=start_date, end_date=end_date, country=country)
+    #         else:
+    #             item_df = self._get_item_data_df_by_date(item=item, data_stack=data_stack, start_date=start_date, end_date=end_date)
+
+    #         # 確認新、舊資料row和column皆未重複，避免concat時報錯
+    #         #item_df = item_df.drop_duplicates()
+    #         item_df = item_df.T.drop_duplicates().T
+    #         #old_item_df = old_item_df.drop_duplicates()
+    #         old_item_df = old_item_df.T.drop_duplicates().T
+    #         item_df = pd.concat([item_df, old_item_df]).sort_index()
+    #         # 確認合併後的資料區間是否已涵蓋該區間內的所有交易日
+    #         trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date)
+    #         item_df_index = list(map(lambda x:datetime2str(x), item_df.index))
+    #         interval_trade_date = list(set(trade_date_list) - set(item_df_index))
+
+    #         # 待改：應補充
+    #         # if len(interval_trade_date) > 0:
+    #         #     logging.warning("[{item}] 合併後資料區間未涵蓋部分交易日，已略過此資料項目之Raw Table轉換".format(item=item))
+    #         #     logging.warning("[{item}] 缺漏之交易日，列表如下：{interval_trade_date}".format(item=item, interval_trade_date=sorted(interval_trade_date)))
+    #         #     continue
+            
+    #         folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_table")
+    #         filePath = os.path.join(folderPath, item+".pkl")
+    #         item_df.to_pickle(filePath)
+    #         logging.info("[{item}][{start_date}-{end_date}] Raw Table資料轉換&儲存完成".format(item=item, 
+    #                         start_date=datetime2str(item_df.index[0]), end_date=datetime2str(item_df.index[-1])))
 
     # ——————————————————————————————————————————————————————————
     # 待完成的函數（開始）
@@ -707,8 +679,8 @@ class Database(object):
     
     # 確認是否有股票改名、下市、上市等狀況
     def check_ticker_change(self, item, benchmark_date, start_date="2000-01-01", end_date="2100-12-31", country="US"):
-        data_df = self._get_item_data_df_byDate(item=item, start_date=start_date, end_date=end_date)
-        benchmark_df = self._get_item_data_df_byDate(item=item, start_date=benchmark_date, end_date=benchmark_date)
+        data_df = self._get_item_data_df_by_date(item=item, start_date=start_date, end_date=end_date)
+        benchmark_df = self._get_item_data_df_by_date(item=item, start_date=benchmark_date, end_date=benchmark_date)
         common_ticker_list, new_ticker_list, disappear_ticker_list = compare_component(data_df.columns.dropna(), benchmark_df.columns.dropna())
         
         logging.info("[Check][{item}]本區間資料相較{date}，共新增{n1}檔標的/減少{n2}檔標的".format(item=item, date=benchmark_date, n1=len(new_ticker_list), n2=len(disappear_ticker_list)))
@@ -731,24 +703,35 @@ class Database(object):
                                     item_list=None, source="polygon", country="US"):
         # if ticker_list == None:
         #     ticker_list = self.get_stock_ticker_list("univ_us_all")
+        if country == "US":
+            data_stack = "US_stock"
+        elif country == "TW":
+            data_stack = "TW_stock"
 
         if start_date == None:
-            start_date = str2datetime(self._get_single_data_status(data_stack=data_stack, item="revenues")["end_date"])
+            start_date = str2datetime(self._get_single_data_status(data_stack=data_stack, item="filing_date")["end_date"])
             start_date = datetime2str(start_date + timedelta(days=1))
 
         if end_date == None:
             end_date = datetime2str(datetime.today())
 
+        folderPath_dict = self._get_data_path_dict(data_stack=data_stack)
         if source == "polygon":
-            # stock_trade_date_list = self._get_stock_trade_date_list(start_date=start_date, end_date=end_date, country="US")
-            # print(stock_trade_date_list)
-            if country == "US":
-                folderPath_dict = self._get_data_path_dict(data_stack="US_stock")
-            elif  country == "TW":
-                folderPath_dict = self._get_data_path_dict(data_stack="TW_stock")
-
             save_stock_financialReport_data_from_Polygon(folderPath_dict=folderPath_dict, API_key=self.polygon_API_key, start_date=start_date, end_date=end_date)
+    
+    def save_stock_company_info(self, ticker_list, source="polygon", country="US"):
+        if source == "polygon":
+            folderPath = self._get_data_path(data_stack="US_stock", item="company_info")
+            save_stock_company_info_from_Polygon(folderPath=folderPath, API_key=self.polygon_API_key, ticker_list=ticker_list)
+
+    def save_stock_delisted_info(self, source="polygon", country="US"):
+        if source == "polygon":
+            folderPath = self._get_data_path(data_stack="US_stock", item="delisted_stock_info")
+            save_stock_delisted_info_from_polygon(folderPath=folderPath, universe_type="CS", API_key=self.polygon_API_key)
+            folderPath = self._get_data_path(data_stack="US_stock", item="delisted_etf_info")
+            save_stock_delisted_info_from_polygon(folderPath=folderPath, universe_type="ETF", API_key=self.polygon_API_key)
             
+
     # 取得FRED官網公布的總經數據，name的可用選項，見Macro/Token_trans/fred.txt
     # def get_fred_data(self, name):
     #     folderPath = self.raw_data_macro_folderPath
