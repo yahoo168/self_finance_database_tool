@@ -333,7 +333,6 @@ class Database(object):
     ## 將時序資料取出組合為DataFrame
     def _get_item_data_df_by_date(self, item, data_stack="US_stock", target_stock_ticker_list=None, start_date=None, end_date=None, pre_fetch_nums=0):
         item_folderPath = self._get_data_path(data_stack=data_stack, item=item, data_level="raw_data")
-
         # 待改：應該直接使用dateime?
         if type(start_date) is not str:
             start_date = datetime2str(start_date)
@@ -361,6 +360,11 @@ class Database(object):
             df = pd.read_csv(fileName, index_col=0)
             df_list.append(df)
 
+        if len(df_list) == 0:
+            logging.warning("[{data_stack}][{item}][{start_date}-{end_date}]區間不存在資料".format(data_stack=data_stack, item=item,
+                                                                                       start_date=start_date, end_date=end_date))
+            return pd.DataFrame()
+        
         df = pd.concat(df_list, axis=1).T
         # 對Index以日期序列賦值並排序
         df.index = pd.to_datetime(date_list)
@@ -510,6 +514,7 @@ class Database(object):
             data_stack = "TW_stock"
 
         if start_date == None:
+            # 待改：一律使用ex_divi好像不太好（？
             start_date = self._get_single_data_status(data_stack=data_stack, item="ex_dividends")["end_date"]
             start_date = datetime2str(str2datetime(start_date) + timedelta(days=1))
 
@@ -517,15 +522,14 @@ class Database(object):
             end_date = datetime2str(datetime.today()+timedelta(days=1))
         
         # 待改，資料源管理
-        #folderPath = self._get_data_path(data_stack=data_stack, item="ex_dividends", data_level="raw_data")
-        #save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="ex_dividend_date")
-        
-        # 因同一天公司可能會宣布N筆股利（不同發放日），較難儲存故先略過
-        #folderPath = self._get_data_path(data_stack="US_stock", item="declaration_dividends", data_level="raw_data")
-        #save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="declaration_date")
+        folderPath = self._get_data_path(data_stack=data_stack, item="ex_dividends", data_level="raw_data")
+        save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="ex_dividend_date")
         
         folderPath = self._get_data_path(data_stack=data_stack, item="pay_dividends", data_level="raw_data")
         save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="pay_date")
+        # 因同一天公司可能會宣布N筆股利（不同發放日），較難儲存故先略過
+        #folderPath = self._get_data_path(data_stack="US_stock", item="declaration_dividends", data_level="raw_data")
+        #save_stock_cash_dividend_from_Polygon(folderPath, self.polygon_API_key, start_date, end_date, div_type="declaration_date")
         
     # 儲存流通股數raw_data
     def save_stock_shares_outstanding(self, ticker_list=None, start_date=None, end_date=None, source="polygon", country="US"):
