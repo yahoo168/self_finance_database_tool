@@ -29,6 +29,12 @@ def str2datetime(strdate):
 def datetime2str(date):
     return date.strftime("%Y-%m-%d")
 
+def str2datetime_list(strdate_list):
+    return list(map(lambda x:str2datetime(x), strdate_list))
+
+def datetime2str_list(date_list):
+    return list(map(lambda x:datetime2str(x), date_list))
+
 def make_folder(path):
     if not os.path.exists(path):
         os.makedirs(path)
