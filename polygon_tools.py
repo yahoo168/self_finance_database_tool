@@ -5,8 +5,8 @@ from threading import Thread, Lock
 import pandas as pd
 
 # 自polygon下載EOD價量相關資料，若無指定起始/結束日期，則自動以上次更新日期的後一日開始抓取資料，更新至今日
-def save_stock_priceVolume_from_Polygon(folderPath, API_key, start_date=None, end_date=None, adjust=False):
-    def _save_stock_priceVolume_from_Polygon_singleDate(folderPath, API_key, item_list, date, adjust):
+def save_stock_priceVolume_from_Polygon(folder_path, API_key, start_date=None, end_date=None, adjust=False):
+    def _save_stock_priceVolume_from_Polygon_singleDate(folder_path, API_key, item_list, date, adjust):
         if adjust==True:
             adjust_flag = "true"
         elif adjust==False:
@@ -31,7 +31,7 @@ def save_stock_priceVolume_from_Polygon(folderPath, API_key, start_date=None, en
             # 存檔至以指定資料項目為名的資料夾之下
             if adjust==True:
                 item = "adj_"+item
-            item_folder_path = os.path.join(folderPath, item)
+            item_folder_path = os.path.join(folder_path, item)
             fileName = os.path.join(item_folder_path, date+".csv")
             data_series.to_csv(fileName)
 
@@ -43,7 +43,7 @@ def save_stock_priceVolume_from_Polygon(folderPath, API_key, start_date=None, en
     # 逐日下載資料，儲存與字典當中
     for index, date in enumerate(date_range_list, 1):
         t = Thread(target=_save_stock_priceVolume_from_Polygon_singleDate, 
-            args=(folderPath, API_key, item_list, date, adjust))
+            args=(folder_path, API_key, item_list, date, adjust))
         t.start()  # 開啟線程，在線程之間設定間隔，避免資料源過載或爬蟲阻擋
         time.sleep(0.1)
         threads.append(t)
@@ -53,8 +53,8 @@ def save_stock_priceVolume_from_Polygon(folderPath, API_key, start_date=None, en
     for t in threads:
         t.join()
 
-def save_stock_split_from_Polygon(folderPath, API_key, start_date=None, end_date=None):
-    def _save_stock_split_from_Polygon_singleDate(folderPath, API_key, date):
+def save_stock_split_from_Polygon(API_key, date_list):
+    def _save_stock_split_from_Polygon_singleDate(API_key, date, data_dict):
         url = "https://api.polygon.io/v3/reference/splits?execution_date={date}&apiKey={API_key}".format(date=date, API_key=API_key)
         data_json = requests.get(url).json()
         results_dict = data_json["results"]
@@ -62,22 +62,20 @@ def save_stock_split_from_Polygon(folderPath, API_key, start_date=None, end_date
             df = pd.DataFrame(results_dict)
             df["adjust_factor"] = df["split_to"] / df["split_from"]
             df = df.pivot(index="execution_date", columns="ticker", values="adjust_factor").T
-            filePath = os.path.join(folderPath, date+".csv")
-            df.to_csv(filePath)
+            data_dict[date] = df.sort_index()
 
-    # 列出起始/結束日，中間的日期，並轉為字串形式
-    date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date,freq='d'))))
-    threads = []  # 儲存線程以待關閉
+    data_dict = dict()
+    threads = list()  # 儲存線程以待關閉
     try:
-        for index, date in enumerate(date_range_list, 1):
+        for index, date in enumerate(date_list, 1):
             t = Thread(target=_save_stock_split_from_Polygon_singleDate, 
-                        args=(folderPath, API_key, date))
+                        args=(API_key, date, data_dict))
             t.start()  # 開啟線程
 
             #在線程之間設定間隔（0.5秒），避免資料源過載或爬蟲阻擋
             time.sleep(0.1)
             threads.append(t)
-            percentage = 100*round(index/len(date_range_list), 2)            
+            percentage = 100*round(index/len(date_list), 2)            
             logging.info("[{date}][split] 資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))                
         for t in threads:
             t.join()
@@ -85,8 +83,10 @@ def save_stock_split_from_Polygon(folderPath, API_key, start_date=None, end_date
     except Exception as e:
         logging.warning(e)
 
-def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_date, div_type):
-    def _save_stock_cash_dividend_from_Polygon_singleDate(folderPath, div_type, date, API_key):
+    return data_dict
+
+def save_stock_cash_dividend_from_Polygon(folder_path, API_key, start_date, end_date, div_type):
+    def _save_stock_cash_dividend_from_Polygon_singleDate(folder_path, div_type, date, API_key):
         #只下載現金股利（CD）
         url = "https://api.polygon.io/v3/reference/dividends?{0}={1}&apiKey={2}&dividend_type=CD".format(div_type, date, API_key)
         data_json = requests.get(url).json()
@@ -94,7 +94,7 @@ def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_d
         if len(results_dict) > 0:
             df = pd.DataFrame(results_dict)
             df = df.pivot(index="ticker", columns=div_type, values="cash_amount")
-            filePath = os.path.join(folderPath, date+".csv")
+            filePath = os.path.join(folder_path, date+".csv")
             df.to_csv(filePath)
     
     # 列出起始/結束日，中間的日期，並轉為字串形式
@@ -103,7 +103,7 @@ def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_d
     try:
         for index, date in enumerate(date_range_list, 1):
             t = Thread(target=_save_stock_cash_dividend_from_Polygon_singleDate, 
-                        args=(folderPath, div_type, date, API_key))
+                        args=(folder_path, div_type, date, API_key))
             t.start()  # 開啟線程
             #在線程之間設定間隔（0.5秒），避免資料源過載或爬蟲阻擋
             time.sleep(0.1)
@@ -116,9 +116,9 @@ def save_stock_cash_dividend_from_Polygon(folderPath, API_key, start_date, end_d
     except Exception as e:
         logging.warning(e)
 
-def save_stock_shares_outstanding_from_Polygon(folderPath, API_key, ticker_list, tradeDate_list=None, start_date=None, end_date=None):
+def save_stock_shares_outstanding_from_Polygon(folder_path, API_key, ticker_list, tradeDate_list=None, start_date=None, end_date=None):
     # 流通股數係透過polygon中的ticker detail資訊取得，索取方式為給定ticker與date，故包裝為雙重函數
-    def _save_stock_shares_outstanding_from_Polygon_singleDate(folderPath, API_key, ticker_list, date):
+    def _save_stock_shares_outstanding_from_Polygon_singleDate(folder_path, API_key, ticker_list, date):
         def _save_stock_shares_outstanding_from_Polygon_singleTicker(API_key, ticker, date):
             url = "https://api.polygon.io/v3/reference/tickers/{}?date={}&apiKey={}".format(ticker, date, API_key)
             data_json = requests.get(url).json()
@@ -139,7 +139,7 @@ def save_stock_shares_outstanding_from_Polygon(folderPath, API_key, ticker_list,
             t.join()
 
         data_series = pd.Series(data_dict)
-        filePath = os.path.join(folderPath, date+".csv")
+        filePath = os.path.join(folder_path, date+".csv")
         data_series.to_csv(filePath)
 
     date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date,freq='d'))))
@@ -150,96 +150,104 @@ def save_stock_shares_outstanding_from_Polygon(folderPath, API_key, ticker_list,
         date_range_list = sorted(date_range_list)
     
     for date in date_range_list:
-        _save_stock_shares_outstanding_from_Polygon_singleDate(folderPath, API_key, ticker_list, date)
+        _save_stock_shares_outstanding_from_Polygon_singleDate(folder_path, API_key, ticker_list, date)
 
-
-
-def save_stock_financialReport_data_from_Polygon(folderPath_dict, API_key, start_date, end_date):
-    def _save_stock_financialReport_data_from_Polygon_singleDate(folderPath_dict, API_key, date):
+def save_stock_financialReport_data_from_Polygon(API_key, date_list):
+    def _save_stock_financialReport_data_from_Polygon_singleDate(API_key, date, data_dict):
         data_list = list()
         #若直接用filing_date=date索引，polygon會同時返回後一天的資料，目前不知原因，故採lte與gte連用進行索引
         url = "https://api.polygon.io/vX/reference/financials?filing_date.gte={filing_date}&filing_date.lte={filing_date}&apiKey={API_key}&limit=100&timeframe=quarterly".format(filing_date=date, API_key=API_key)
         data_json = requests.get(url).json()
+        
         if len(data_json["results"]) == 0:
             return 0
-        # 因polygon財報資料有索引上限100，財報季時當日會超過100，故須進行翻頁索引
+        # 因polygon財報資料有索引上限100，財報季時每日通常超過100家公司發布財報，故須進行翻頁索引
         data_list.extend(data_json["results"])
         while True:
             if "next_url" in data_json.keys():
-                next_url = data_json["next_url"] + "&apiKey={API_key}}&limit=100".format(API_key=API_key)
+                next_url = data_json["next_url"] + "&apiKey={API_key}&limit=100".format(API_key=API_key)
                 data_json = requests.get(next_url).json()
                 data_list.extend(data_json["results"])
             else:
                 break
-
-        data_dict = dict()
+        
+        # data_list儲存該日完成翻頁索引後，所有raw_data（dict）
+        raw_data_dict = dict()
         for data in data_list:
-            try:
-                #有的ticker會是空值
+            # 有的ticker會是空值或是None，故須進行例外處理
+            if "tickers" in data.keys() and data["tickers"] != None:
+                # data[tickers]為一list，正常情況僅有1個ticker，然而可能出現公司有多檔ticker（如Google）的情況
                 ticker = data["tickers"][0]
+                # raw_data中的財務數據是以財務四表為key，逐一索取
+                # Note：資料庫中的基本面財報資料也以財務四表整理，然而在此處是將四表數據統一索取，入庫時參照data_path的分類再個別整理，並非於此處分類
                 statement_dict = {}
                 for statement in ["income_statement", "balance_sheet", "cash_flow_statement", "comprehensive_income"]:
+                    # 部分公司可能不具有四表中的部分報表資料
                     if statement not in data["financials"].keys():
                         continue
                     statement_dict.update(data["financials"][statement])
-                statement_df = pd.DataFrame(statement_dict)
-                value_series = statement_df.loc["value", :]
-                data_dict[ticker] = value_series
-            except:
+                # raw_data尚包含unit...等資料，此處拋棄其餘資料，僅取值
+                raw_data_dict[ticker] = pd.DataFrame(statement_dict).loc["value", :]
+            else:
+                #logging.warning("Ticker缺失")
                 continue
         
-        df = pd.DataFrame(data_dict).fillna(0)
-        # 儲存發布日資料
-        filing_date_folderPath = folderPath_dict["filing_date"]
-        filing_date_filePath = os.path.join(filing_date_folderPath, date+".csv")
-        filing_date = pd.Series(df.columns)
-        filing_date = filing_date.rename("filing_date")
-        filing_date.to_csv(filing_date_filePath)
-        
-        # 儲存財報資料
-        for i in range(len(df)):
-            data_series = df.iloc[i, :]
-            item = data_series.name
-            # 部分科目過於冷門，若不在2023/07/10已註冊的70多個科目當中，便略過
-            try:
-                folderPath = folderPath_dict[item]
-                filePath = os.path.join(folderPath, date+".csv")
-                data_series.to_csv(filePath)
-            except:
-                continue
-
-    date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date, freq='d'))))
+        # row:各報表科目名稱； col: 當日有發布財報的公司ticker
+        df = pd.DataFrame(raw_data_dict).fillna(0)
+        data_dict[date] = df
+    
+    data_dict = dict()
     threads = list()
-    for index, date in enumerate(date_range_list, 1):
+    for index, date in enumerate(date_list, 1):
         t = Thread(target=_save_stock_financialReport_data_from_Polygon_singleDate, 
-            args=(folderPath_dict, API_key, date))
+            args=(API_key, date, data_dict))
         t.start()  # 開啟線程，在線程之間設定間隔，避免資料源過載或爬蟲阻擋
         time.sleep(0.1)
         threads.append(t)
-        percentage = 100*round(index/len(date_range_list), 2)            
+        percentage = 100*round(index/len(date_list), 2)            
         logging.info("[{date}]財報資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))
 
     for t in threads:
         t.join()
 
-def save_stock_universe_list_from_polygon(universe_type, API_key):
-    ticker_list = list()    
-    url = "https://api.polygon.io/v3/reference/tickers?type={universe_type}&market=stocks&active=true&limit=1000&apiKey={API_key}".format(universe_type=universe_type, API_key=API_key)
-    data_json = requests.get(url).json()
-    # 因polygon標的資料有索引上限1000，故須進行翻頁索引
-    part_ticker_list = list(pd.DataFrame(data_json["results"])["ticker"])
-    ticker_list.extend(part_ticker_list)
-    while True:
-        if "next_url" in data_json.keys():
-            next_url = data_json["next_url"] + "&apiKey={API_key}&limit=1000".format(API_key=API_key)
-            data_json = requests.get(next_url).json()
-            part_ticker_list = list(pd.DataFrame(data_json["results"])["ticker"])
-            ticker_list.extend(part_ticker_list)
-        else:
-            break
-    return ticker_list
+    return data_dict
 
-def save_stock_delisted_info_from_polygon(folderPath, universe_type, API_key):
+
+def save_stock_universe_list_from_polygon(API_key, universe_name, date_list):    
+    # 轉為polygon的URL辨識碼
+    if universe_name=="univ_us_stock":
+        ticker_type = "CS"
+    elif universe_name=="univ_us_etf":
+        ticker_type = "ETF"
+    
+    data_dict = dict()
+    for date in date_list:
+        ticker_list = list()
+        url = "https://api.polygon.io/v3/reference/tickers?type={ticker_type}&date={date}&market=stocks&active=True&limit=1000&apiKey={API_key}".format(ticker_type=ticker_type, date=date, API_key=API_key)
+        data_json = requests.get(url).json()
+        # 因polygon標的資料有索引上限1000，故須進行翻頁索引
+        part_ticker_list = list(pd.DataFrame(data_json["results"])["ticker"])
+        ticker_list.extend(part_ticker_list)
+        while True:
+            if "next_url" in data_json.keys():
+                next_url = data_json["next_url"] + "&apiKey={API_key}&limit=1000".format(API_key=API_key)
+                data_json = requests.get(next_url).json()
+                part_ticker_list = list(pd.DataFrame(data_json["results"])["ticker"])
+                ticker_list.extend(part_ticker_list)
+            else:
+                break
+    
+        data_dict[date] = pd.Series(ticker_list)
+        logging.info("[SAVE][{universe_name}][{date}]成分股資料抓取完成".format(universe_name=universe_name, date=date))
+
+        #TEMP
+        # folder_path = "/Users/yahoo168/Documents/工作管理/AlphaHelix/投資研究/Quant/回測系統/Database/raw_data/US_stock/universe/univ_us_stock"
+        # file_path = os.path.join(folder_path, date+".csv")
+        # data_dict[date].to_csv(file_path)
+    
+    return data_dict
+
+def save_stock_delisted_info_from_polygon(folder_path, universe_type, API_key):
     df_list = list()
     url = "https://api.polygon.io/v3/reference/tickers?type={universe_type}&market=stocks&active=false&limit=1000&apiKey={API_key}".format(universe_type=universe_type, API_key=API_key)
     data_json = requests.get(url).json()
@@ -264,10 +272,17 @@ def save_stock_delisted_info_from_polygon(folderPath, universe_type, API_key):
     df = df.sort_values(by="delisted_date")
     df = df.reset_index(drop=True)
     date = datetime2str(datetime.today())
-    filePath = os.path.join(folderPath, date+".csv")
+
+    if universe_type=="CS":
+        file_name = "delisted_stock_info"
+
+    if universe_type=="ETF":
+        file_name = "delisted_etf_info"
+
+    filePath = os.path.join(folder_path, file_name+".csv")
     df.to_csv(filePath)
 
-def save_stock_company_info_from_Polygon(folderPath, API_key, ticker_list):
+def save_stock_company_info_from_Polygon(API_key, ticker_list):
     def _save_stock_company_info_from_Polygon_singleTicker(API_key, ticker):
         url = "https://api.polygon.io/v3/reference/tickers/{}?&apiKey={}".format(ticker, API_key)
         data_json = requests.get(url).json()
@@ -288,10 +303,9 @@ def save_stock_company_info_from_Polygon(folderPath, API_key, ticker_list):
         t.join()
 
     company_info_df = pd.DataFrame(company_info_dict).T
-    filePath = os.path.join(folderPath, "company_info.csv")
-    company_info_df.to_csv(filePath)
+    return company_info_df
 
-# 約一年執行一次，待改：未給明路徑
+# 最久一年執行一次即可，待改：未給明路徑
 def save_stock_market_status_series(self):
     url = "https://api.polygon.io/v1/marketstatus/upcoming?apiKey=vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj"
     data_json = requests.get(url).json()
@@ -309,17 +323,17 @@ def save_stock_market_status_series(self):
     weekend_series = date_range_series[is_weekend_series]
 
     # 1: 交易日, 0:六日休市, -1:非六日休市
-    market_status_series.loc[weekend_series, :] = 0
-    market_status_series.loc[holiday_series, :] = -1
-    market_status_series = market_status_series.fillna(1)
-    return market_status_series
+    market_status_df.loc[weekend_series, :] = 0
+    market_status_df.loc[holiday_series, :] = -1
+    market_status_df = market_status_df.fillna(1)
+    return market_status_df
 
 # 自Polygon下載財報資料 - 主程式（待改：S/D問題）
-# def save_stock_financialReport_from_Polygon(folderPath, ticker_list, start_date, end_date):
+# def save_stock_financialReport_from_Polygon(folder_path, ticker_list, start_date, end_date):
 #     ticker_list = ticker_list
-#     cache_folderPath = os.path.join(self.cache_folderPath, "polygon_financial")
-#     make_folder(cache_folderPath)
-#     raw_df = _get_financial_raw_data(cache_folderPath, ticker_list, start_date, end_date)
+#     cache_folder_path = os.path.join(self.cache_folder_path, "polygon_financial")
+#     make_folder(cache_folder_path)
+#     raw_df = _get_financial_raw_data(cache_folder_path, ticker_list, start_date, end_date)
 #     ticker_list = list(set(raw_df.columns))
 #     #待改：start/end的用途？
 #     preload_items_list = ["start_date", "end_date", "filing_date"]
@@ -341,17 +355,17 @@ def save_stock_market_status_series(self):
 #         # 以前值替補空值
 #         item_df = item_df.ffill()
 #         # 將塊狀資料儲存為時間序列資料
-#         _save_blockData_to_seriesData(folderPath, item_df, item, com_prev_data=False)
+#         _save_blockData_to_seriesData(folder_path, item_df, item, com_prev_data=False)
 
 # # 自Polygon下載財報資料 - 呼叫API取得資料（為塊狀資料，格式較雜亂）
-# def _get_financial_raw_data(cache_folderPath, ticker_list, start_date, end_date):
+# def _get_financial_raw_data(cache_folder_path, ticker_list, start_date, end_date):
 #     df_list = list()
 #     '''
 #     因資料筆數多（約15000筆），中途可能因網路問題導致報錯，為避免須重新下載而設計cache機制；
 #     已抓取的資料會存於cache_financial_data資料夾，會自動讀取（每次下載前須清空cache）
 #     '''
 #     for index, ticker in enumerate(ticker_list, 0):
-#         cache_filePath = os.path.join(cache_folderPath, ticker+".json")
+#         cache_filePath = os.path.join(cache_folder_path, ticker+".json")
 #         if not os.path.exists(cache_filePath):
 #             url = "https://api.polygon.io/vX/reference/financials?ticker={ticker}&period_of_report_date.gte={start_date}&period_of_report_date.lte={end_date}&timeframe=quarterly&include_sources=false&apiKey=VzFtRb0w6lQcm1HNm4dDly5fHr_xfviH". \
 #                format(start_date=start_date, end_date=end_date, ticker=ticker)
@@ -387,9 +401,9 @@ def save_stock_market_status_series(self):
 #     return pd.concat(df_list, axis=1)
 
 # # 自Polygon下載財報資料 - 將塊狀資料切分為時序資料，並依照需求補前資料 
-# def _save_blockData_to_seriesData(folderPath, df, item, com_prev_data):
-#     item_folderPath = os.path.join(folderPath, item)
-#     make_folder(item_folderPath)
+# def _save_blockData_to_seriesData(folder_path, df, item, com_prev_data):
+#     item_folder_path = os.path.join(folder_path, item)
+#     make_folder(item_folder_path)
 #     #待改：思考有需要補嗎？寫策略的時候再補是不是比較好？
 #     #補足前期資料
 #     if com_prev_data:
@@ -397,7 +411,7 @@ def save_stock_market_status_series(self):
 #         count = 0
 #         while True:
 #         # 依照日期往前尋找最靠近的資料，若前一日非交易日，則繼續往前
-#             fileName = os.path.join(item_folderPath, prev_date.strftime("%Y-%m-%d")+".csv")
+#             fileName = os.path.join(item_folder_path, prev_date.strftime("%Y-%m-%d")+".csv")
 #             if os.path.exists(fileName) == False:
 #                 prev_date = prev_date - timedelta(days=1)
 #                 count += 1
@@ -422,5 +436,5 @@ def save_stock_market_status_series(self):
 #         data_series = df.iloc[:, num]
 #         date = data_series.name.strftime("%Y-%m-%d")
 #         # 存檔至以指定資料項目為名的資料夾之下
-#         fileName = os.path.join(item_folderPath, date+".csv")
+#         fileName = os.path.join(item_folder_path, date+".csv")
 #         data_series.to_csv(fileName)

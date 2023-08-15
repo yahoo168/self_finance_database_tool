@@ -81,96 +81,23 @@ def compare_component(s1, s2):
     only_2_part_list = sorted(list(set(s2) - set(s1)))
     return common_part_list, only_1_part_list, only_2_part_list
 
-# 塊狀資料轉化為時序資料:
-
-# # 將指定資料夾中的塊狀資料(fileName:ticker, row:date, column:items)轉化為時序型資料
-# source_folder_path = "/Users/yahoo168/Documents/programming/Quant/Database/Stock"
-# # 取得指定資料夾中的檔案名作為ticker_list
-# raw_ticker_list = os.listdir(source_folder_path)
-# # 去除後綴檔名
-# ticker_list = [ticker.split(".")[0] for ticker in raw_ticker_list]
-# # 去除異常空值
-# ticker_list = [ticker for ticker in ticker_list if len(ticker)!=0]
-
-# # 指定需要轉化的資料項目
-# item_list = ["open", "high", "low", "close", "adjclose", "volume"]
-# for item in item_list:
-#     df_list = []
-#     for ticker in ticker_list:
-#         fileName = os.path.join(source_folder_path, ticker+".pkl")
-#         df = pd.read_pickle(fileName)
-#         # 篩選出塊狀資料中的指定資料項目
-#         data_series = df[item]
-#         data_series = data_series.rename(ticker)
-#         df_list.append(data_series)
-#     # Trasform後，row:tickers, colunm:Date
-#     df = pd.concat(df_list, axis=1).T
-#     for num in range(len(df.columns)):
-#         # 依序將各column切出，轉為csv檔，檔名為該日日期
-#         data_series = df.iloc[:,num]
-#         date = data_series.name.strftime("%Y-%m-%d")
-#         # 存檔至以指定資料項目為名的資料夾之下
-#         fileName = os.path.join(save_folder_path, item, date+".csv")
-#         data_series.to_csv(fileName)
-
-# Ticker轉換
-# ticker_path = "/Users/yahoo168/Documents/programming/Quant/Database/Ticker/TW50_ticker_list.pkl"
-# NASDAQ_ticker_list = pd.read_pickle(ticker_path)
-# fileName = "/Users/yahoo168/Documents/programming/Quant/Database/Ticker/ticker_list.csv"
-# pd.Series(NASDAQ_ticker_list).to_csv(fileName)
-
-
-    # 建立資料夾路徑，母資料夾下含Raw_Data、Raw_Table、Table三資料夾
-    # def _build_folderPath2(self):
-    #     self.data_path_folderPath = os.path.join(self.database_folderPath, "data_path")
-    #     make_folder(self.data_path_folderPath)
-
-    #     self.raw_data_folderPath = os.path.join(self.database_folderPath, "raw_data")
-    #     self.raw_table_folderPath = os.path.join(self.database_folderPath, "raw_table")
-    #     self.table_folderPath = os.path.join(self.database_folderPath, "table")
-    #     self.cache_folderPath = os.path.join(self.database_folderPath, "cache")
-    #     make_folder(self.cache_folderPath)
-        
-    #     self.raw_data_US_stock_folderPath = os.path.join(self.raw_data_folderPath, "US_stock")
-    #     self.raw_data_TW_stock_folderPath = os.path.join(self.raw_data_folderPath, "TW_stock")
-    #     self.raw_data_macro_folderPath = os.path.join(self.raw_data_folderPath, "US_macro")
-    #     make_folder(self.raw_data_US_stock_folderPath)
-    #     make_folder(self.raw_data_TW_stock_folderPath)
-    #     make_folder(self.raw_data_macro_folderPath)
-        
-    #     self.raw_table_US_stock_folderPath = os.path.join(self.raw_table_folderPath, "US_stock")
-    #     self.raw_table_TW_stock_folderPath = os.path.join(self.raw_table_folderPath, "TW_stock")
-    #     self.raw_table_macro_folderPath = os.path.join(self.raw_table_folderPath, "US_macro")
-    #     make_folder(self.raw_table_US_stock_folderPath)
-    #     make_folder(self.raw_table_TW_stock_folderPath)
-    #     make_folder(self.raw_table_macro_folderPath)
-
-    #     self.table_US_stock_folderPath = os.path.join(self.table_folderPath, "US_stock")
-    #     self.table_TW_stock_folderPath = os.path.join(self.table_folderPath, "TW_stock")
-    #     self.table_macro_folderPath = os.path.join(self.table_folderPath, "US_macro")
-    #     make_folder(self.table_US_stock_folderPath)
-    #     make_folder(self.table_TW_stock_folderPath)
-    #     make_folder(self.table_macro_folderPath)
-
-
-## 儲存trade_date，目前以yfinance中ETF有報價的日期作為交易日，美國參考SPY，台灣參考0050
-# def save_stock_trade_date(self, source="yfinance", country="US"):
-#     #待改：應標記非交易日是六日or假日(holidays)，可用1、0、-1標記
-#     if country == "US":
-#         folderPath = self._get_data_path(data_stack="US_stock", item="trade_date", data_level="raw_data")
-#         reference_ticker = "SPY"
+# 將給定的數個df，對齊coloumn與index，空值補Nan
+def get_aligned_df_list(df_list):
+    index_list, columns_list = list(), list()
     
-#     elif country == "TW":
-#         folderPath = self._get_data_path(data_stack="TW_stock", item="trade_date", data_level="raw_data")
-#         reference_ticker = "0050.TW" 
-            
-#     if source == "yfinance":
-#         reference_df = yf.Ticker(reference_ticker).history(period="max")
+    for item_df in df_list:
+        index_list.append(set(item_df.index))
+        columns_list.append(set(item_df.columns))
 
-#     elif source == "yahoo_fin":
-#         reference_df = _download_data_from_Yahoo_Fin(reference_ticker)
+    index_series = pd.Series(list(index_list[0].union(*index_list))).dropna()
+    columns_series = pd.Series(list(columns_list[0].union(*columns_list))).dropna()
+    
+    aligned_item_df_list = list()
+    for item_df in df_list:
+        aligned_item_df = item_df.reindex(index=index_series, columns=columns_series)
+        aligned_item_df = aligned_item_df.sort_index()
+        aligned_item_df_list.append(aligned_item_df)
 
-#     trade_date_series = reference_df.index.strftime("%Y-%m-%d").to_series()
-#     filePath = os.path.join(folderPath, "trade_date.csv")
-#     trade_date_series.to_csv(filePath, index=False)
-#     logging.info("[{country} trade_date] 已儲存".format(country=country))
+    return aligned_item_df_list
+
+TODAY_DATE_STR = datetime2str(datetime.today())

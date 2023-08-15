@@ -1,0 +1,13 @@
+name,
+description,
+data_stack,
+item_path,
+start_date,
+end_date,
+update_time,
+data_num,
+extreme_value_rule,
+type: series, block
+file_type: csv, xlsx, pkl...
+freq: None, day, week, month, ... 
+source: list()
