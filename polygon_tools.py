@@ -115,13 +115,14 @@ def save_stock_cash_dividend_from_Polygon(folder_path, API_key, start_date, end_
     
     except Exception as e:
         logging.warning(e)
-
-def save_stock_shares_outstanding_from_Polygon(folder_path, API_key, ticker_list, tradeDate_list=None, start_date=None, end_date=None):
+ 
+def save_stock_shares_outstanding_from_Polygon(API_key, ticker_list, start_date, end_date):
     # 流通股數係透過polygon中的ticker detail資訊取得，索取方式為給定ticker與date，故包裝為雙重函數
-    def _save_stock_shares_outstanding_from_Polygon_singleDate(folder_path, API_key, ticker_list, date):
+    def _save_stock_shares_outstanding_from_Polygon_singleDate(API_key, ticker_list, date):
         def _save_stock_shares_outstanding_from_Polygon_singleTicker(API_key, ticker, date):
             url = "https://api.polygon.io/v3/reference/tickers/{}?date={}&apiKey={}".format(ticker, date, API_key)
             data_json = requests.get(url).json()
+            #註：不能用weighted shares
             data_dict[ticker] = data_json["results"]["share_class_shares_outstanding"]
         
         data_dict = dict()
@@ -138,19 +139,14 @@ def save_stock_shares_outstanding_from_Polygon(folder_path, API_key, ticker_list
         for t in threads:
             t.join()
 
-        data_series = pd.Series(data_dict)
-        filePath = os.path.join(folder_path, date+".csv")
-        data_series.to_csv(filePath)
+        return pd.Series(data_dict)
 
     date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date,freq='d'))))
-    
-    #若有給定交易日序列，則非交易日不用下載，可加快下載速度    
-    if tradeDate_list != None:
-        date_range_list = set(date_range_list).intersection(set(tradeDate_list))
-        date_range_list = sorted(date_range_list)
-    
+    result_dict = dict()
     for date in date_range_list:
-        _save_stock_shares_outstanding_from_Polygon_singleDate(folder_path, API_key, ticker_list, date)
+        data_series = _save_stock_shares_outstanding_from_Polygon_singleDate(API_key, ticker_list, date)
+        result_dict[date] = data_series
+    return result_dict
 
 def save_stock_financialReport_data_from_Polygon(API_key, date_list):
     def _save_stock_financialReport_data_from_Polygon_singleDate(API_key, date, data_dict):

@@ -49,13 +49,6 @@ class Database(object):
         for key, value in criteria_dict.items():
             path_df = path_df[path_df[key]==value]
         return list(path_df.index)
-
-    # def get_item_meta_data(self):
-    #     for data_stack in self.data_stack_list:
-    #         self.data_path_dict
-    #         self.item_object_list = list()
-
-    #     pass
     
     # 依照data_path載入資料路徑，並建立對應的資料夾層級結構
     def _load_and_build_data_path(self):
@@ -446,10 +439,6 @@ class Database(object):
         elif method == "o2o":
             item_name, price_item = "o2o_ret", "open"
 
-        if cal_dividend == False:
-            # example:"o2o_ret_wo_div"
-            item_name += "_wo_div"
-
         folder_path = self._get_data_path(data_stack=data_stack, item=item_name, data_level="raw_data")
         
         if start_date == None:
@@ -474,22 +463,25 @@ class Database(object):
         # 若不給定ticker_list，會導致賦值時，columns沒有對齊
         price_df[adjust_ticker_list] = adjusted_item_df[adjust_ticker_list]
         # 將股價加上當日除息的現金股利
-        if cal_dividend == True:
-            dividends_df = self._get_item_data_df_by_date(item="ex_dividends", data_stack=data_stack, start_date=start_date, end_date=end_date)
-            dividends_df = dividends_df.fillna(0)
-            dividends_ticker_list = price_df.columns.intersection(dividends_df.columns)
-            adjusted_dividends_df = price_df[dividends_ticker_list] + dividends_df[dividends_ticker_list]
-            price_df[dividends_ticker_list] = adjusted_dividends_df[dividends_ticker_list]
-        
+        dividends_df = self._get_item_data_df_by_date(item="ex_dividends", data_stack=data_stack, start_date=start_date, end_date=end_date)
+        dividends_df = dividends_df.fillna(0)
+        dividends_ticker_list = price_df.columns.intersection(dividends_df.columns)
+        adjusted_dividends_df = price_df[dividends_ticker_list] + dividends_df[dividends_ticker_list]
+        price_df[dividends_ticker_list] = adjusted_dividends_df[dividends_ticker_list]
+                
         logging.info("[daily return][{method}] 資料計算中".format(method=method))
         # 去除第一row：因取pct後為空值
         return_df = price_df.pct_change().iloc[1:,:]
+
         # 切分return
         for i in range(len(return_df)):
-            data = return_df.iloc[i,:]
-            fileName = datetime2str(data.name)
+            data_series = return_df.iloc[i,:].dropna()
+            #去除index為NaN的情況（可能源自price資料異常）
+            data_series = data_series[data_series.index.notna()]
+            data_series = data_series.sort_index()
+            fileName = datetime2str(data_series.name)
             file_path = os.path.join(folder_path, fileName+".csv")
-            data.to_csv(file_path)
+            data_series.to_csv(file_path)
     
     # 儲存現金股利raw_data
     def save_stock_cash_dividend(self, ticker_list=None, start_date=None, end_date=None, source="polygon", country="US"):
@@ -518,23 +510,93 @@ class Database(object):
         
     # 儲存流通股數raw_data
     def save_stock_shares_outstanding(self, ticker_list=None, start_date=None, end_date=None, source="polygon", country="US"):
+        if country == "US":
+            data_stack = "US_stock"
+        elif country == "TW":
+            data_stack = "TW_stock"
+
         if start_date == None:
             start_date = self.get_single_data_status(data_stack=data_stack, item="shares_outstanding")["end_date"]
             start_date = datetime2str(str2datetime(start_date) + timedelta(days=1))
 
         if end_date == None:
             end_date = datetime2str(datetime.today())
-
-        if country == "US":
-            data_stack = "US_stock"
-        elif country == "TW":
-            data_stack = "TW_stock"
-
+        # 因polygon須依據ticker逐一抓取股數，若每日更新較為費時，故僅在每月最後一日重新抓取
+        # 其他日則依據前一日股數，參考split調整
+        trade_date_list = self.get_stock_trade_date_list(start_date=start_date, end_date=end_date, country=country)
         folder_path = self._get_data_path(data_stack=data_stack, item="shares_outstanding", data_level="raw_data")
-        if source == "polygon":
-            cache_folder_path = os.path.join(self.cache_folder_path, "polygon_shares_outstanding")
-            trade_date_list = self.get_stock_trade_date_list(start_date=start_date, end_date=end_date, country=country)
-            save_stock_shares_outstanding_from_Polygon(folder_path, cache_folder_path, self.polygon_API_key, ticker_list, trade_date_list, start_date, end_date)
+        
+        for date in trade_date_list:
+            last_trade_date = self.get_closest_trade_date(date, direction="last", cal_self=False)
+            next_trade_date = self.get_closest_trade_date(date, direction="next", cal_self=False)
+            last_date_shares_series = self._get_item_data_df_by_date(item="shares_outstanding", data_stack="US_stock", start_date=last_trade_date, end_date=last_trade_date).squeeze()
+            stock_splits_df = self._get_item_data_df_by_date(item="stock_splits", data_stack="US_stock", start_date=date, end_date=date)
+                    
+            if len(stock_splits_df.columns) == 0:
+                if_splits_exist = False
+            else:
+                if_splits_exist = True
+                #須設定axis為0，否則當日僅有一檔標的split時，ticker會消失，降為成純量
+                stock_splits_series = stock_splits_df.squeeze(axis=0)
+            
+            # 月底最後一交易日，重新抓取
+            if str2datetime(date).month != str2datetime(next_trade_date).month:
+                logging.info("[NOTE][本日是本月最後一交易日，須重新更新股數計算基礎]")
+                # 取得最新一筆美股所有上市公司清單
+                last_univ_us_stock_update_date = self._get_start_date_by_num(item="univ_us_stock", data_stack="US_stock", end_date=date, num=1)
+                univ_us_ticker_list = list(self._get_item_data_df_by_date(item="univ_us_stock", data_stack="US_stock", start_date=last_univ_us_stock_update_date, end_date=last_univ_us_stock_update_date).squeeze())
+                # 因自polygon下載的股數，通常會延遲1~2日反應分割調整
+                # 直接採用當日數據會導致出錯，故若重新下載日前2日曾進行分割，則該股不重新下載
+                recent_splits_start_date = self._get_start_date_by_num(item="stock_splits", data_stack="US_stock", end_date=date, num=2)
+                recent_splits_ticker_list = list(self._get_item_data_df_by_date(item="stock_splits", data_stack="US_stock", start_date=recent_splits_start_date, end_date=date).columns)
+                ticker_list = sorted(list(set(univ_us_ticker_list) - set(recent_splits_ticker_list)))                
+                # ticker_list = ticker_list[:3]
+                result_dict = save_stock_shares_outstanding_from_Polygon(self.polygon_API_key, ticker_list=ticker_list, start_date=date, end_date=date)
+                shares_series = result_dict[date]
+                # 確認缺漏的標的：近日有作分割 + polygon資料源缺漏
+                lost_ticker_set = set(univ_us_ticker_list) - set(list(shares_series.index))
+                lost_ticker_list = list(lost_ticker_set.intersection(last_date_shares_series.index))
+                # 針對缺漏的標的，改為依據前一日股數，參考split調整（即依照一般日算法）
+                lost_ticker_last_date_shares_series = last_date_shares_series[lost_ticker_list]
+                if if_splits_exist == False:
+                    lost_ticker_shares_series = lost_ticker_last_date_shares_series
+                else:
+                    lost_ticker_shares_series = lost_ticker_last_date_shares_series.mul(stock_splits_series, fill_value=1).dropna()
+                    lost_ticker_shares_series = lost_ticker_shares_series[lost_ticker_last_date_shares_series.index]
+                    
+                # 將缺漏標的資料，併入polygon重新下載而得的資料
+                shares_series = pd.concat([shares_series, lost_ticker_shares_series])
+                logging.info("[SAVE][{date}][流通股數計算完成（重新下載更新）]".format(date=date))
+
+            # 非月底最後一交易日，依據前一日股數，參考split調整
+            else:
+                if if_splits_exist == False:
+                    shares_series = last_date_shares_series
+                else:
+                    shares_series = last_date_shares_series.mul(stock_splits_series, fill_value=1).dropna()
+                    # 若不重取index，在stock_split存在，但last_date_shares不存在的ticker會導致錯誤
+                    # 因為fill value=1，該標的的股數會 = 1 * 分割數，故須剔除
+                    shares_series = shares_series[last_date_shares_series.index]
+                    
+                logging.info("[SAVE][{date}][流通股數計算完成（依據前日基礎計算）]".format(date=date))
+
+            file_name = os.path.join(folder_path, date+".csv")
+            
+            common_ticker_list = list(set(shares_series.index).intersection(last_date_shares_series.index))
+            share_change_series = shares_series[common_ticker_list] / last_date_shares_series[common_ticker_list]
+            share_change_series = share_change_series[share_change_series!=1]
+
+            if len(share_change_series) > 0:
+                logging.info("[NOTE][{date}][本日流通股數變化如下：本日股數/前日股數]".format(date=date))
+                logging.info(dict(share_change_series))
+            
+            new_ticker_list = list(set(shares_series.index) - set(common_ticker_list))
+            if len(new_ticker_list) > 0:
+                logging.info("[NOTE][{date}][本日新增標的如下]".format(date=date))
+                logging.info(new_ticker_list)
+            
+            shares_series.name = date
+            shares_series.to_csv(file_name)
     
     def get_stock_financialReport_df(self, item, start_date, end_date, country="US"):
         if country == "US":
